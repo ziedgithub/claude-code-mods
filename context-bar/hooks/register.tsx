@@ -555,7 +555,7 @@ export const register: Register = on => {
         </Box>
       )
 
-    const blocks = [modelLength, barLength, cacheLength, actionsLength(confirming), modesText.length].filter(
+    const blocks = [cacheLength, modelLength, barLength, actionsLength(confirming), modesText.length].filter(
       n => n > 0,
     )
     const rightLength = blocks.reduce((sum, n) => sum + n, 0) + BLOCK_GAP * (blocks.length - 1)
@@ -563,9 +563,9 @@ export const register: Register = on => {
     if (fitsInRow(columns, rightLength)) {
       return (
         <Box flexShrink={0} gap={BLOCK_GAP}>
+          {cacheBlock}
           {modelBlock}
           {bar}
-          {cacheBlock}
           {actions}
           {beneath}
         </Box>
@@ -574,9 +574,9 @@ export const register: Register = on => {
 
     return (
       <Box flexShrink={0} flexDirection="column" alignItems="flex-end">
+        {cacheBlock}
         {modelBlock}
         {bar}
-        {cacheBlock}
         {actions}
         {beneath}
       </Box>
