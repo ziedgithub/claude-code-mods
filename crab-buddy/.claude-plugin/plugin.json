@@ -1,0 +1,10 @@
+{
+  "name": "crab-buddy",
+  "version": "0.1.0",
+  "description": "A pixel-art Claude crab above the prompt that works, thinks, cheers and sleeps with the session, with a small crab in its own color for each subagent",
+  "author": { "name": "Zied BEN AMAR", "url": "https://github.com/ziedgithub" },
+  "homepage": "https://github.com/ziedgithub/claude-code-mods/tree/main/crab-buddy",
+  "repository": "https://github.com/ziedgithub/claude-code-mods",
+  "license": "MIT",
+  "keywords": ["crab", "mascot", "buddy", "subagents", "pixel-art", "fun"]
+}

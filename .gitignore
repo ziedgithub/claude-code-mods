@@ -1,0 +1,4 @@
+.DS_Store
+node_modules/
+# Written by Claude Code each time it loads a mod: the API types for the editor and tsc
+*/.claude-plugin/types/
