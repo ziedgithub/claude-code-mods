@@ -1,6 +1,6 @@
 {
   "name": "warm-compact",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Compacts an idle session just before its prompt cache goes cold, so the next prompt reads a short summary instead of the whole conversation uncached. A footer chip and /warm-compact turn it off for a session.",
   "author": { "name": "Zied BEN AMAR", "url": "https://github.com/ziedgithub" },
   "homepage": "https://github.com/ziedgithub/claude-code-mods/tree/main/warm-compact",

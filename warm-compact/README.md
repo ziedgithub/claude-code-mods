@@ -2,6 +2,8 @@
 
 Compacts an idle session just before its prompt cache goes cold.
 
+It is separate from Claude Code's own auto-compact, which compacts when the context window fills up. warm-compact acts on time instead: it compacts when you've been away long enough for the cache to lapse, even when the window is far from full.
+
 Claude Code caches the conversation for 5 minutes or an hour after each request, depending on your account. If you come back after that, your next prompt re-reads the whole conversation uncached, which is the most expensive way to read it. warm-compact compacts the session a minute before the cache lapses, while the compaction itself can still read the conversation from the cache. Your next prompt then starts from a short summary.
 
 ## When it compacts
@@ -19,7 +21,7 @@ Headless runs (`claude -p`) are left alone.
 
 ## Turning it off for a session
 
-A chip at the right end of the footer row, next to [context-bar](../context-bar/) if you have it, shows `Auto-compact on`. Click it to turn auto-compact off for this session, and again to turn it back on. Turning it off during the countdown cancels it.
+A chip at the right end of the footer row, next to [context-bar](../context-bar/) if you have it, shows `Warm compact on`. Click it to turn it off for this session, and again to turn it back on. Turning it off during the countdown cancels it.
 
 The same from the prompt:
 

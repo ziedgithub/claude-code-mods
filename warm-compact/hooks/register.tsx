@@ -12,7 +12,7 @@ const DEFAULT_LEAD_SECONDS = 60
 const MIN_LEAD_MS = 15_000
 const DONE_TEXT = 'Compacted before the prompt cache went cold'
 const COMMAND = 'warm-compact'
-const LABEL = 'Auto-compact '
+const LABEL = 'Warm compact '
 const NARROW_BELOW = 80
 const BLOCK_GAP = 2
 const ON_COLOR = '#238636'
@@ -78,7 +78,7 @@ const compact = async ($: EngineInterface): Promise<void> => {
   }
 }
 
-export const chipLabel = (isOn: boolean, isNarrow: boolean): string => ` ${isNarrow ? 'auto ' : ''}${isOn ? 'on' : 'off'} `
+export const chipLabel = (isOn: boolean, isNarrow: boolean): string => ` ${isNarrow ? 'warm ' : ''}${isOn ? 'on' : 'off'} `
 
 // `/warm-compact` flips it, `/warm-compact on` and `off` set it
 export const switchedTo = (args: string, isOn: boolean): boolean | null => {
@@ -89,7 +89,7 @@ export const switchedTo = (args: string, isOn: boolean): boolean | null => {
 }
 
 const turnText = (isOn: boolean): string =>
-  isOn ? 'Auto-compact is on for this session.' : 'Auto-compact is off for this session.'
+  isOn ? 'Warm compact is on for this session.' : 'Warm compact is off for this session.'
 
 // Turned off mid-countdown, the countdown goes at once
 const turn = async ($: EngineInterface, isOn: boolean): Promise<void> => {
@@ -129,7 +129,7 @@ export const register: Register = (on, options) => {
     if (!e.isInteractive) return result
     const stored = await $.store.get(CACHE_TTL_KEY)
     if (isCacheTtl(stored)) cacheTtl = stored
-    await $.command.register({ name: COMMAND, description: 'Turn auto-compact on or off for this session (on, off, or nothing to flip it)' })
+    await $.command.register({ name: COMMAND, description: 'Turn warm compact on or off for this session: compacting before the prompt cache goes cold (on, off, or nothing to flip it)' })
     $.clock.every(TICK_MS, () => void tick($))
     return result
   })
