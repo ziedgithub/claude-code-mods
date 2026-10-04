@@ -169,6 +169,8 @@ const engine = (on: any) => {
   on('session.end', async (_$: unknown, e: { sessionId: string }) => ({ sessionId: e.sessionId }))
   on('turn.complete', async () => ({ text: '' }))
   on('session.compact', async () => ({ messages: SUMMARY, tokensBefore: 120000, tokensAfter: 2000 }))
+  // The engine draws nothing in the slot with no mode label
+  on('ui.render', async ($: any, e: unknown) => h($.ui.resolve(e).Box, null))
   return world
 }
 

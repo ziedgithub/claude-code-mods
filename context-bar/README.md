@@ -13,6 +13,8 @@ A footer for Claude Code. In the slot right of the hint line under the prompt, i
 
 On a narrow terminal the labels shorten, and when one row can't hold everything the blocks stack.
 
+What other mods put in the same slot, such as [warm-compact](../warm-compact/)'s on/off chip, goes at the right end of the row, along with the engine's own mode labels.
+
 ## Install
 
 ```sh

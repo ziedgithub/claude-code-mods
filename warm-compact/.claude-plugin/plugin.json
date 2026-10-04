@@ -1,0 +1,25 @@
+{
+  "name": "warm-compact",
+  "version": "0.1.0",
+  "description": "Compacts an idle session just before its prompt cache goes cold, so the next prompt reads a short summary instead of the whole conversation uncached. A footer chip and /warm-compact turn it off for a session.",
+  "author": { "name": "Zied BEN AMAR", "url": "https://github.com/ziedgithub" },
+  "homepage": "https://github.com/ziedgithub/claude-code-mods/tree/main/warm-compact",
+  "repository": "https://github.com/ziedgithub/claude-code-mods",
+  "license": "MIT",
+  "keywords": ["compact", "prompt-cache", "context", "cost"],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "minTokens": {
+      "type": "number",
+      "title": "Smallest context to compact",
+      "description": "A conversation smaller than this many tokens is left alone: reading it uncached costs little.",
+      "default": 50000
+    },
+    "leadSeconds": {
+      "type": "number",
+      "title": "Seconds before the cache expires",
+      "description": "How long before the cache would go cold the compaction starts.",
+      "default": 60
+    }
+  }
+}

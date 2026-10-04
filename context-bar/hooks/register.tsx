@@ -425,9 +425,10 @@ export const register: Register = on => {
 
     const { Box, Text, Button } = $.ui.resolve(e)
     const columns = e.viewport?.columns ?? DEFAULT_COLUMNS
-    // The labels already in the slot (`focus`, `memory paused`) keep the engine's drawing
+    // The labels already in the slot (`focus`, `memory paused`) keep the engine's drawing, and
+    // what other mods beneath draw there goes with them, at the right end
     const modesText = e.props.modes.join(' & ')
-    const modes = modesText === '' ? null : await next(e)
+    const beneath = await next(e)
 
     const parts = info === null ? null : modelParts(info)
     const pending = await read($, asking)
@@ -554,7 +555,7 @@ export const register: Register = on => {
         </Box>
       )
 
-    const blocks = [modesText.length, modelLength, barLength, cacheLength, actionsLength(confirming)].filter(
+    const blocks = [modelLength, barLength, cacheLength, actionsLength(confirming), modesText.length].filter(
       n => n > 0,
     )
     const rightLength = blocks.reduce((sum, n) => sum + n, 0) + BLOCK_GAP * (blocks.length - 1)
@@ -562,22 +563,22 @@ export const register: Register = on => {
     if (fitsInRow(columns, rightLength)) {
       return (
         <Box flexShrink={0} gap={BLOCK_GAP}>
-          {modes}
           {modelBlock}
           {bar}
           {cacheBlock}
           {actions}
+          {beneath}
         </Box>
       )
     }
 
     return (
       <Box flexShrink={0} flexDirection="column" alignItems="flex-end">
-        {modes}
         {modelBlock}
         {bar}
         {cacheBlock}
         {actions}
+        {beneath}
       </Box>
     )
   })

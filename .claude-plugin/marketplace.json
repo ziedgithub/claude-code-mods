@@ -5,14 +5,14 @@
     "url": "https://github.com/ziedgithub"
   },
   "metadata": {
-    "description": "Mods for Claude Code: a richer footer and a crab buddy above the prompt."
+    "description": "Mods for Claude Code: a richer footer, a crab buddy above the prompt, and a compaction that beats the cache going cold."
   },
   "plugins": [
     {
       "name": "context-bar",
       "source": "./context-bar",
       "description": "A footer showing the model and effort, how full the context window is, and the prompt cache, with one-click compact and clear",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "category": "productivity",
       "homepage": "https://github.com/ziedgithub/claude-code-mods/tree/main/context-bar"
     },
@@ -23,6 +23,14 @@
       "version": "0.1.0",
       "category": "fun",
       "homepage": "https://github.com/ziedgithub/claude-code-mods/tree/main/crab-buddy"
+    },
+    {
+      "name": "warm-compact",
+      "source": "./warm-compact",
+      "description": "Compacts an idle session just before its prompt cache goes cold, with a footer chip and /warm-compact to turn it off for a session",
+      "version": "0.1.0",
+      "category": "productivity",
+      "homepage": "https://github.com/ziedgithub/claude-code-mods/tree/main/warm-compact"
     }
   ]
 }
