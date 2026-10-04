@@ -3,6 +3,8 @@ import { expect, mock, test } from 'claude-code/testing'
 const MIN = 60_000
 const SUMMARY = [{ role: 'user', text: 'The conversation so far.', toolUses: [] }]
 const USAGE = { input_tokens: 10, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 500, output_tokens: 100 }
+// The compaction's own request, reading the conversation from the cache
+const COMPACTION_USAGE = { input_tokens: 10, output_tokens: 1500, cache_read_input_tokens: 119_000, cache_creation_input_tokens: 500 }
 const START = { cwd: '/', surface: 'terminal', isInteractive: true } as never
 const COMPLETE = { reason: 'answer', answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1' } as never
 
@@ -11,9 +13,14 @@ const COMPLETE = { reason: 'answer', answer: 'ok', durationMs: 1, isAborted: fal
 const engine = (on: any, store: Record<string, unknown> = {}) => {
   const clock = mock.clock(on)
   mock.store(on, store)
-  const world = { clock, tokens: 120_000 as number | undefined, model: 'claude-opus-5-5', draft: '', compactions: [] as string[], statuses: [] as (string | undefined)[], toasts: [] as string[] }
+  const world = { clock, tokens: 120_000 as number | undefined, model: 'claude-opus-5-5', draft: '', usage: COMPACTION_USAGE as object | undefined, compactions: [] as string[], statuses: [] as (string | undefined)[], toasts: [] as string[], logs: [] as string[] }
   on('session.usage', async () => ({ value: { startedAt: 0, rateLimits: [], context: { window: 200_000, tokens: world.tokens } } }))
   on('session.model', async () => ({ value: world.model }))
+  on('session.id', async () => ({ value: 's1' }))
+  on('ui.log', async (_$: unknown, e: { text: string }) => {
+    world.logs.push(e.text)
+    return { value: undefined }
+  })
   on('prompt.read', async () => ({ value: { text: world.draft, cursor: 0 } }))
   on('ui.status', async (_$: unknown, e: { text?: string }) => {
     world.statuses.push(e.text)
@@ -38,7 +45,7 @@ const engine = (on: any, store: Record<string, unknown> = {}) => {
   on('command.register', async () => ({ value: undefined }))
   on('session.compact', async (_$: unknown, e: { trigger?: string }) => {
     world.compactions.push(e.trigger ?? 'plugin')
-    return { messages: SUMMARY, tokensBefore: 120_000, tokensAfter: 2000 }
+    return { messages: SUMMARY, tokensBefore: 120_000, tokensAfter: 2000, ...(world.usage === undefined ? {} : { usage: world.usage }) }
   })
   return world
 }
@@ -207,6 +214,52 @@ test('/warm-compact flips it, and takes on or off', async ($, on) => {
   expect((await run($, 'off')).text).toBe('Warm compact is off for this session.')
   expect((await run($, ' ON ')).text).toBe('Warm compact is on for this session.')
   expect(await chip.label()).toBe(' on ')
-  expect((await run($, 'maybe')).text).toBe('Usage: /warm-compact [on|off]')
+  expect((await run($, 'maybe')).text).toBe('Usage: /warm-compact [on|off|stats]')
   expect(await chip.label()).toBe(' on ')
+})
+
+test('a compaction leaves a line in the transcript for whoever comes back', async ($, on) => {
+  const world = engine(on)
+  await $.session.start(START)
+  await answer($)
+  await world.clock.advance(61 * MIN)
+  expect(world.logs).toHaveLength(1)
+  expect(world.logs[0]).toMatch(/^Compacted at \d\d:\d\d \(120k → 2k tokens\), just before the prompt cache went cold\./)
+})
+
+test('a compaction that found the cache gone says it saved nothing', async ($, on) => {
+  const world = engine(on)
+  world.usage = { input_tokens: 10, output_tokens: 1500, cache_read_input_tokens: 0, cache_creation_input_tokens: 119_500 }
+  await $.session.start(START)
+  await answer($)
+  await world.clock.advance(61 * MIN)
+  expect(world.logs[0]).toMatch(/the prompt cache had already lapsed, so this one saved nothing\.$/)
+})
+
+test('/warm-compact stats tallies a compaction once the session goes on', async ($, on) => {
+  const world = engine(on)
+  await $.session.start(START)
+  expect((await run($, 'stats')).text).toMatch(/This session +0 +0 +-/)
+  await answer($)
+  await world.clock.advance(61 * MIN)
+  // Spent so far: the compaction's own request, 0.05 × 119k read + 2 × 500 written + 10 + 5 × 1500 out
+  expect((await run($, 'stats')).text).toMatch(/This session +1 +0 +-14k/)
+  await answer($)
+  // Back: 2 × 120k spared, less the compaction and 2 × 2k to write the summary
+  const stats = (await run($, 'stats')).text
+  expect(stats).toMatch(/This session +1 +1 +\+222k/)
+  expect(stats).toMatch(/Last 7 days +1 +1 +\+222k/)
+  expect(stats).toMatch(/All time +1 +1 +\+222k/)
+})
+
+test('the tally is kept across sessions, and a week on leaves the last 7 days', async ($, on) => {
+  const record = { at: 0, sessionId: 'old', model: 'claude-sonnet-5-5', ttl: '1h', before: 100_000, after: 5000, usage: null, isReturned: true }
+  const world = engine(on, { compactions: [record] })
+  await world.clock.advance(8 * 24 * 60 * MIN)
+  await $.session.start(START)
+  const stats = (await run($, 'stats')).text
+  expect(stats).toMatch(/This session +0 +0 +-/)
+  expect(stats).toMatch(/Last 7 days +0 +0 +-/)
+  // 2 × 100k spared, less 0.1 × 100k read, 5 × 5k summarized and 2 × 5k written back
+  expect(stats).toMatch(/All time +1 +1 +\+155k/)
 })

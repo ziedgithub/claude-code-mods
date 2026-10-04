@@ -27,8 +27,8 @@
     {
       "name": "warm-compact",
       "source": "./warm-compact",
-      "description": "Compacts an idle session just before its prompt cache goes cold, with a footer chip and /warm-compact to turn it off for a session",
-      "version": "0.1.1",
+      "description": "Compacts an idle session just before its prompt cache goes cold, tells you when you come back, and tallies what it saved. A footer chip and /warm-compact turn it off for a session",
+      "version": "0.2.0",
       "category": "productivity",
       "homepage": "https://github.com/ziedgithub/claude-code-mods/tree/main/warm-compact"
     }

@@ -1,11 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { CacheTtl } from '../types'
+import type { CacheTtl, CompactionRecord } from '../types'
 import { DEFAULT_TTL, hitPercent, inferTtl, isCacheTtl, plan, warnText } from './plan'
+import { MAX_RECORDS, noticeText, recordsOf, statsText } from './savings'
 
 const TICK_MS = 1000
 const CACHE_TTL_KEY = 'cacheTtl'
+const RECORDS_KEY = 'compactions'
 const DEFAULT_MIN_TOKENS = 50_000
 const DEFAULT_LEAD_SECONDS = 60
 // Never so close to the lapse that the compaction's request could miss the cache
@@ -21,6 +23,7 @@ const OFF_COLOR = '#6e7681'
 const last = atom({ plugin: 'warm-compact', key: 'last' } as const, null)
 const isTurnRunning = atom({ plugin: 'warm-compact', key: 'isTurnRunning' } as const, false)
 const isEnabled = atom({ plugin: 'warm-compact', key: 'isEnabled' } as const, true)
+const pendingCompaction = atom({ plugin: 'warm-compact', key: 'pendingCompaction' } as const, null)
 
 let cacheTtl: CacheTtl = DEFAULT_TTL
 let shownStatus: string | undefined
@@ -61,16 +64,43 @@ const learnTtl = async ($: EngineInterface, ttl: CacheTtl | null): Promise<void>
 const forgetRequest = ($: EngineInterface): Promise<unknown> =>
   update($, last, prev => (prev === null ? prev : { ...prev, at: null }))
 
-// A plugin's own compaction skips its own hooks, so the request is forgotten here
-const compact = async ($: EngineInterface): Promise<void> => {
+const addRecord = async ($: EngineInterface, record: CompactionRecord): Promise<void> => {
+  const records = recordsOf(await $.store.get(RECORDS_KEY))
+  await $.store.set(RECORDS_KEY, [...records, record].slice(-MAX_RECORDS))
+}
+
+// The session going on after a compaction is when the re-read it spared would have been paid
+const markReturned = async ($: EngineInterface): Promise<void> => {
+  const at = await read($, pendingCompaction)
+  if (at === null) return
+  await update($, pendingCompaction, () => null)
+  const records = recordsOf(await $.store.get(RECORDS_KEY))
+  await $.store.set(RECORDS_KEY, records.map(r => (r.at === at ? { ...r, isReturned: true } : r)))
+}
+
+// A plugin's own compaction skips its own hooks, so the request is forgotten here. The toast
+// is for someone watching; the transcript line is for whoever comes back
+const compact = async ($: EngineInterface, model: string, tokens: number): Promise<void> => {
   isCompacting = true
   showStatus($, undefined)
   try {
     const result = await $.session.compact()
-    if (result.skip === undefined) {
-      await forgetRequest($)
-      $.ui.toast(DONE_TEXT)
+    if (result.skip !== undefined) return
+    await forgetRequest($)
+    const record: CompactionRecord = {
+      at: await $.clock.now(),
+      sessionId: await $.session.id(),
+      model,
+      ttl: cacheTtl,
+      before: result.tokensBefore ?? tokens,
+      after: result.tokensAfter ?? result.usage?.output_tokens ?? 0,
+      usage: result.usage ?? null,
+      isReturned: false,
     }
+    await addRecord($, record)
+    await update($, pendingCompaction, () => record.at)
+    $.ui.toast(DONE_TEXT)
+    $.ui.log(noticeText(record, result.tokensBefore !== undefined && result.tokensAfter !== undefined))
   } catch {
     // A turn began meanwhile, and renews the cache by itself
   } finally {
@@ -102,11 +132,12 @@ const tick = async ($: EngineInterface): Promise<void> => {
   if (!(await read($, isEnabled))) return
   const request = await read($, last)
   const { context } = await $.session.usage()
+  const model = await $.session.model()
   let next = plan(request, {
     now: await $.clock.now(),
     ttl: cacheTtl,
     leadMs,
-    model: await $.session.model(),
+    model,
     tokens: context.tokens,
     minTokens,
     isTurnRunning: await read($, isTurnRunning),
@@ -117,7 +148,7 @@ const tick = async ($: EngineInterface): Promise<void> => {
   else showStatus($, undefined)
   if (next.kind !== 'compact') return
   triedFor = request?.at ?? null
-  await compact($)
+  await compact($, model, context.tokens ?? 0)
 }
 
 export const register: Register = (on, options) => {
@@ -129,13 +160,14 @@ export const register: Register = (on, options) => {
     if (!e.isInteractive) return result
     const stored = await $.store.get(CACHE_TTL_KEY)
     if (isCacheTtl(stored)) cacheTtl = stored
-    await $.command.register({ name: COMMAND, description: 'Turn warm compact on or off for this session: compacting before the prompt cache goes cold (on, off, or nothing to flip it)' })
+    await $.command.register({ name: COMMAND, description: 'Compact before the prompt cache goes cold: on or off for this session (nothing flips it), or stats for what it saved' })
     $.clock.every(TICK_MS, () => void tick($))
     return result
   })
 
   on('turn.start', async ($, e, next) => {
     await update($, isTurnRunning, () => true)
+    await markReturned($)
     return next(e)
   })
 
@@ -168,8 +200,11 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: COMMAND }, async ($, e) => {
+    if (e.args.trim().toLowerCase() === 'stats') {
+      return { text: statsText(recordsOf(await $.store.get(RECORDS_KEY)), await $.clock.now(), await $.session.id()) }
+    }
     const isOn = switchedTo(e.args, await read($, isEnabled))
-    if (isOn === null) return { text: `Usage: /${COMMAND} [on|off]` }
+    if (isOn === null) return { text: `Usage: /${COMMAND} [on|off|stats]` }
     await turn($, isOn)
     return { text: turnText(isOn) }
   })
