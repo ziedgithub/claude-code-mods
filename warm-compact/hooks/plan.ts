@@ -1,4 +1,4 @@
-import type { CacheTtl, LastRequest } from '../types'
+import type { CacheTtl, Kept, LastRequest } from '../types'
 
 const MINUTE_MS = 60_000
 const SECOND_MS = 1000
@@ -38,6 +38,21 @@ export const inferTtl = (prev: LastRequest, model: string, hit: number, requestA
   return hit < COLD_BELOW ? '5m' : null
 }
 
+// Past a renewal, a read this warm found the conversation, and one this cold found only
+// the tools and the system prompt, which other sessions keep cached
+const RENEWED_FROM = 90
+const LAPSED_BELOW = 50
+
+// A renewal reads the entry without the hour-long TTL a session's own requests ask for.
+// Whether it holds the entry an hour or five minutes shows in what a read between the two
+// after it finds
+export const inferRenewTtl = (renewedAt: number, hit: number, readAt: number): CacheTtl | null => {
+  const pause = readAt - renewedAt
+  if (pause < TTL_MS['5m'] + TTL_MARGIN_MS || pause > TTL_MS['1h'] - TTL_MARGIN_MS) return null
+  if (hit >= RENEWED_FROM) return '1h'
+  return hit < LAPSED_BELOW ? '5m' : null
+}
+
 export type Moment = {
   now: number
   ttl: CacheTtl
@@ -48,24 +63,38 @@ export type Moment = {
   tokens: number | undefined
   minTokens: number
   isTurnRunning: boolean
+  isCompactOn: boolean
+  isKeepWarmOn: boolean
+  // The most renewals in one pause, after which a compaction takes over
+  maxRenewals: number
+  kept: Kept | null
+  // How long a renewal holds the entry, which may be less than a request's TTL
+  renewTtl: CacheTtl
 }
 
-export type Plan = { kind: 'idle' } | { kind: 'warn'; inMs: number } | { kind: 'compact' }
+export type Plan = { kind: 'idle' } | { kind: 'warn'; inMs: number } | { kind: 'compact' } | { kind: 'renew' }
 
 const IDLE: Plan = { kind: 'idle' }
 
-// Each request renews the entry, so it lapses one TTL after the last. The compaction starts
-// `leadMs` ahead, while its own request can still read the conversation from the cache, and
-// is announced for WARN_MS before that. A turn renews the entry by itself; a switched model
-// has none of the conversation cached, and a small conversation costs little to read cold
+// Each request renews the entry, so it lapses one TTL after the last, or after the last
+// renewal keep warm made. Before it does, keep warm renews it again, up to `maxRenewals`
+// times in a pause, and then a compaction takes over. Either starts `leadMs` ahead, while
+// its own request can still read the conversation from the cache. A compaction is
+// announced for WARN_MS before it starts; a renewal changes nothing anyone sees. A turn
+// renews the entry by itself; a switched model has none of the conversation cached, and a
+// small conversation costs little to read cold
 export const plan = (last: LastRequest | null, m: Moment): Plan => {
   if (last === null || last.at === null || m.isTurnRunning || last.model !== m.model) return IDLE
   if (m.tokens === undefined || m.tokens < m.minTokens) return IDLE
-  const expiresAt = last.at + TTL_MS[m.ttl]
-  const startAt = expiresAt - Math.min(m.leadMs, TTL_MS[m.ttl] - WARN_MS)
+  const renewals = m.kept?.count ?? 0
+  const action = m.isKeepWarmOn && renewals < m.maxRenewals ? 'renew' : m.isCompactOn ? 'compact' : null
+  if (action === null) return IDLE
+  const ttlMs = m.kept === null ? TTL_MS[m.ttl] : TTL_MS[m.renewTtl]
+  const expiresAt = (m.kept?.at ?? last.at) + ttlMs
+  const startAt = expiresAt - Math.min(m.leadMs, ttlMs - WARN_MS)
   if (m.now >= expiresAt - LATE_MS) return IDLE
-  if (m.now >= startAt) return { kind: 'compact' }
-  if (m.now >= startAt - WARN_MS) return { kind: 'warn', inMs: startAt - m.now }
+  if (m.now >= startAt) return { kind: action }
+  if (action === 'compact' && m.now >= startAt - WARN_MS) return { kind: 'warn', inMs: startAt - m.now }
   return IDLE
 }
 

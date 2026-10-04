@@ -1,10 +1,10 @@
 import { expect, test } from 'claude-code/testing'
 
-import { hitPercent, inferTtl, plan, warnText } from './plan'
+import { hitPercent, inferRenewTtl, inferTtl, plan, warnText } from './plan'
 
 const MIN = 60_000
 const last = { at: 0, model: 'opus' }
-const moment = { now: 0, ttl: '1h' as const, leadMs: MIN, model: 'opus', tokens: 120_000, minTokens: 50_000, isTurnRunning: false }
+const moment = { now: 0, ttl: '1h' as const, leadMs: MIN, model: 'opus', tokens: 120_000, minTokens: 50_000, isTurnRunning: false, isCompactOn: true, isKeepWarmOn: false, maxRenewals: 2, kept: null, renewTtl: '1h' as const }
 
 test('plan waits, warns for 30 s, then compacts a minute before the hour is up', () => {
   expect(plan(last, { ...moment, now: 58 * MIN })).toEqual({ kind: 'idle' })
@@ -34,6 +34,40 @@ test('plan leaves a running turn, a switched model, a small or unmeasured conver
   expect(plan(last, { ...moment, now, tokens: undefined })).toEqual({ kind: 'idle' })
   expect(plan({ ...last, at: null }, { ...moment, now })).toEqual({ kind: 'idle' })
   expect(plan(null, { ...moment, now })).toEqual({ kind: 'idle' })
+})
+
+test('keep warm renews the cache before each lapse, then hands over to a compaction', () => {
+  const warm = { ...moment, isKeepWarmOn: true }
+  // No countdown before a renewal
+  expect(plan(last, { ...warm, now: 58.7 * MIN })).toEqual({ kind: 'idle' })
+  expect(plan(last, { ...warm, now: 59 * MIN })).toEqual({ kind: 'renew' })
+  // The renewal at 59 minutes moves the lapse an hour on
+  const once = { at: 59 * MIN, count: 1 }
+  expect(plan(last, { ...warm, kept: once, now: 61 * MIN })).toEqual({ kind: 'idle' })
+  expect(plan(last, { ...warm, kept: once, now: 118 * MIN })).toEqual({ kind: 'renew' })
+  // After the last renewal, the compaction, announced
+  const twice = { at: 118 * MIN, count: 2 }
+  expect(plan(last, { ...warm, kept: twice, now: 176.5 * MIN })).toEqual({ kind: 'warn', inMs: 30_000 })
+  expect(plan(last, { ...warm, kept: twice, now: 177 * MIN })).toEqual({ kind: 'compact' })
+  // With compaction off, the cache is let go
+  expect(plan(last, { ...warm, isCompactOn: false, kept: twice, now: 177 * MIN })).toEqual({ kind: 'idle' })
+})
+
+test('a renewal that holds five minutes is renewed again within them', () => {
+  const warm = { ...moment, isKeepWarmOn: true, renewTtl: '5m' as const, maxRenewals: 3 }
+  const once = { at: 59 * MIN, count: 1 }
+  expect(plan(last, { ...warm, kept: once, now: 63 * MIN })).toEqual({ kind: 'renew' })
+})
+
+test('inferRenewTtl reads how long a renewal held from a later read', () => {
+  expect(inferRenewTtl(0, 95, 20 * MIN)).toBe('1h')
+  expect(inferRenewTtl(0, 30, 20 * MIN)).toBe('5m')
+  expect(inferRenewTtl(0, 70, 20 * MIN)).toBe(null)
+  expect(inferRenewTtl(0, 95, 3 * MIN)).toBe(null)
+})
+
+test('with both off, nothing happens', () => {
+  expect(plan(last, { ...moment, isCompactOn: false, now: 59 * MIN })).toEqual({ kind: 'idle' })
 })
 
 test('inferTtl reads the TTL off a pause between five minutes and an hour', () => {

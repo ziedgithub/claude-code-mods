@@ -3,6 +3,8 @@ export type CacheTtl = '5m' | '1h'
 // `at`: when it was made, null once a compaction or a /clear changed the prefix.
 // `model`: the session's model then, the one the entry belongs to
 export type LastRequest = { at: number | null; model: string }
+// The renewals keep warm made since the last request: the latest's start, and how many
+export type Kept = { at: number; count: number }
 
 // What a compaction's own request was answered over, as the API reports it
 export type CompactionUsage = {
@@ -12,12 +14,15 @@ export type CompactionUsage = {
   cache_creation_input_tokens: number
 }
 
-// One compaction warm-compact made, kept across sessions to tally what they saved.
-// `before`, `after`: the conversation's size in tokens either side of it.
+// One compaction or cache renewal warm-compact made, kept across sessions to tally what
+// they saved. `kind`: absent for a compaction.
+// `before`, `after`: the conversation's size in tokens either side of a compaction, or the
+// size a renewal read (`after` 0).
 // `usage`: its request's, when the engine reported one.
-// `isReturned`: whether the session went on afterwards, which is when the re-read it
-// spared would have been paid
+// `isReturned`: whether the session went on afterwards with what it kept, which is when the
+// re-read it spared would have been paid
 export type CompactionRecord = {
+  kind?: 'renewal'
   at: number
   sessionId: string
   model: string
@@ -35,8 +40,12 @@ declare module 'claude-code' {
       isTurnRunning: boolean
       // Whether it compacts at all in this session: the footer chip and /warm-compact flip it
       isEnabled: boolean
-      // When this session's latest compaction ran, until the session goes on after it
-      pendingCompaction: number | null
+      // Whether it renews the cache in compaction's place: the footer's second chip and
+      // /keep-warm flip it
+      isKeepWarm: boolean
+      kept: Kept | null
+      // When this session's latest compaction or renewal ran, until the session goes on
+      pendingRecord: number | null
     }
   }
 }

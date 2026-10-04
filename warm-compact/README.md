@@ -1,6 +1,6 @@
 # warm-compact
 
-Compacts an idle session just before its prompt cache goes cold.
+Compacts an idle session just before its prompt cache goes cold, or keeps the cache warm while you're away.
 
 It is separate from Claude Code's own auto-compact, which compacts when the context window fills up. warm-compact acts on time instead: it compacts when you've been away long enough for the cache to lapse, even when the window is far from full.
 
@@ -23,7 +23,15 @@ Headless runs (`claude -p`) are left alone.
 
 ## Turning it off for a session
 
-A chip at the right end of the footer row, next to [context-bar](../context-bar/) if you have it, shows `Warm compact on`. Click it to turn it off for this session, and again to turn it back on. Turning it off during the countdown cancels it.
+Two chips sit on their own rows under the prompt, below the mode line:
+
+```
+⏸ manual mode on · ? for shortcuts
+ on   Warm compact
+ off  Keep warm
+```
+
+Click `Warm compact` to turn it off for this session, and again to turn it back on. Turning it off during the countdown cancels it.
 
 The same from the prompt:
 
@@ -36,15 +44,35 @@ The same from the prompt:
 
 A new session, or a `/clear`, starts with it on.
 
+## Keep warm: renew the cache instead
+
+A compaction keeps your session cheap, but it trades the conversation for a summary. Keep warm keeps the whole conversation instead: a minute before the cache lapses, it renews it with one tiny request that re-reads the conversation from the cache. That request costs about a tenth of the conversation's size in tokens (a twentieth on Opus 5.5) and starts the cache's clock again. Coming back to a cold cache would cost twice its size.
+
+It's off by default, because it spends tokens while you're away. Turn it on with the `Keep warm` chip, or from the prompt:
+
+```
+/keep-warm        flips it
+/keep-warm on     turns it on
+/keep-warm off    turns it off
+```
+
+- **It renews the cache at most twice per pause** (two hours on an hour-long cache), then warm compact takes over, if it's on. The `keepWarmRenewals` option changes how many times.
+- **A renewal is invisible.** It adds nothing to the conversation and the model never sees it; a line in the transcript, `Kept the prompt cache warm at 14:32 (1 of 2).`, is for you. Text left in the prompt box doesn't hold it off.
+- **Every renewal is checked.** If one finds the cache gone, warm compact takes over at once, while it's cheap to.
+- **Some models can't be renewed.** On Sonnet 5.5, with Claude Code 2.1.289, the renewal request differs slightly from the session's own and misses the cache. Keep warm notices the first miss and leaves that model to warm compact until Claude Code updates.
+- **How long a renewal holds the cache** is learned the first time you come back, or renew again, after one. If it turns out to be only 5 minutes on your account, keeping an hour-long cache warm would cost more than compacting, so keep warm stands down and says so.
+
+Renewals count in `/warm-compact stats` too: each costs its request, and the last one before you come back is credited with the re-read it spared.
+
 ## What it saved
 
 `/warm-compact stats` adds up what the compactions saved, for this session, the last 7 days and all time:
 
 ```
-              compactions  came back  net saved
-This session            1          1      +222k
-Last 7 days             5          4      +1.1M
-All time                9          7      +2.0M
+              compactions  renewals  came back  net saved
+This session            1         0          1      +222k
+Last 7 days             5         3          6      +1.4M
+All time                9         5         11      +2.6M
 ```
 
 Savings are counted in input tokens, the unit the API prices everything against: writing a token to an hour-long cache costs 2 of them (1.25 for a 5-minute cache), reading one from the cache 0.1 (0.05 on Opus 5.5, 0.025 on Fable 5.1), and generating one 5.
@@ -62,7 +90,8 @@ In `/config`, or in `~/.claude/settings.json` under `pluginConfigs`:
 | Option | Default | What it does |
 | --- | --- | --- |
 | `minTokens` | 50000 | The smallest conversation it compacts, in tokens |
-| `leadSeconds` | 60 | How long before the cache lapses the compaction starts (15 at least) |
+| `leadSeconds` | 60 | How long before the cache lapses a compaction or a renewal starts (15 at least) |
+| `keepWarmRenewals` | 2 | With keep warm on, how many times the cache is renewed in one pause before warm compact takes over |
 
 ## Install
 

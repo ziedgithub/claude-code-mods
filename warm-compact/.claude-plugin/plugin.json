@@ -1,12 +1,21 @@
 {
   "name": "warm-compact",
-  "version": "0.2.0",
-  "description": "Compacts an idle session just before its prompt cache goes cold, so the next prompt reads a short summary instead of the whole conversation uncached. A footer chip and /warm-compact turn it off for a session.",
-  "author": { "name": "Zied BEN AMAR", "url": "https://github.com/ziedgithub" },
+  "version": "0.3.0",
+  "description": "Compacts an idle session just before its prompt cache goes cold, or keeps the cache warm while you're away, so your next prompt doesn't re-read the whole conversation uncached. Two chips under the prompt, /warm-compact and /keep-warm turn each on or off for a session.",
+  "author": {
+    "name": "Zied BEN AMAR",
+    "url": "https://github.com/ziedgithub"
+  },
   "homepage": "https://github.com/ziedgithub/claude-code-mods/tree/main/warm-compact",
   "repository": "https://github.com/ziedgithub/claude-code-mods",
   "license": "MIT",
-  "keywords": ["compact", "prompt-cache", "context", "cost"],
+  "keywords": [
+    "compact",
+    "context",
+    "cost",
+    "keep-warm",
+    "prompt-cache"
+  ],
   "types": "./types/index.d.ts",
   "userConfig": {
     "minTokens": {
@@ -14,6 +23,12 @@
       "title": "Smallest context to compact",
       "description": "A conversation smaller than this many tokens is left alone: reading it uncached costs little.",
       "default": 50000
+    },
+    "keepWarmRenewals": {
+      "type": "number",
+      "title": "Most cache renewals per pause",
+      "description": "With keep warm on, how many times the cache is renewed while you are away before a compaction takes over (when warm compact is on). On an hour-long cache, 2 keeps it two hours.",
+      "default": 2
     },
     "leadSeconds": {
       "type": "number",

@@ -44,7 +44,7 @@ Needs a recent Claude Code: built and tested on 2.1.289.
 | --- | --- |
 | [**context-bar**](context-bar/) | A footer showing the model and effort, how full the context window is, and the prompt cache, with one-click compact and clear. |
 | [**crab-buddy**](crab-buddy/) | A pixel-art Claude crab above the prompt that works, thinks, cheers and sleeps along with your session, plus a small crab in its own color for each subagent. |
-| [**warm-compact**](warm-compact/) | Compacts an idle session a minute before its prompt cache goes cold, so your next prompt starts from a short summary instead of re-reading the whole conversation uncached. A chip in the footer turns it off for the session. |
+| [**warm-compact**](warm-compact/) | Compacts an idle session a minute before its prompt cache goes cold, so your next prompt starts from a short summary instead of re-reading the whole conversation uncached. Or, with keep warm on, renews the cache while you're away and keeps the whole conversation. Two chips under the prompt turn each on or off. |
 
 ![crab-buddy in action](docs/crab-buddy.gif)
 
