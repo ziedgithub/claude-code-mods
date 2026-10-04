@@ -2,6 +2,43 @@
 
 Two mods for [Claude Code](https://claude.com/claude-code). Mods are plugins that hook straight into the engine to draw their own UI.
 
+## Install
+
+Paste this in your terminal:
+
+```sh
+claude plugin marketplace add ziedgithub/claude-code-mods && claude plugin install context-bar@zied-mods && claude plugin install crab-buddy@zied-mods
+```
+
+Then restart Claude Code. That's it.
+
+<details>
+<summary>Only want one of them, or prefer to do it from inside Claude Code?</summary>
+
+Inside Claude Code, type:
+
+```
+/plugin marketplace add ziedgithub/claude-code-mods
+/plugin install crab-buddy@zied-mods
+/plugin install context-bar@zied-mods
+```
+
+Skip either `install` line to leave that mod out, then restart Claude Code.
+
+</details>
+
+**Update** to the latest version, then restart:
+
+```sh
+claude plugin marketplace update zied-mods && claude plugin update context-bar@zied-mods && claude plugin update crab-buddy@zied-mods
+```
+
+**Remove**: `claude plugin uninstall crab-buddy@zied-mods` (or `context-bar@zied-mods`).
+
+Needs a recent Claude Code: built and tested on 2.1.289.
+
+## What's inside
+
 | Mod | What it does |
 | --- | --- |
 | [**context-bar**](context-bar/) | A footer showing the model and effort, how full the context window is, and the prompt cache, with one-click compact and clear. |
@@ -12,20 +49,6 @@ Two mods for [Claude Code](https://claude.com/claude-code). Mods are plugins tha
 ![context-bar](docs/context-bar.png)
 
 Each mod works on its own. Install one or both.
-
-## Install
-
-```sh
-claude plugin marketplace add ziedgithub/claude-code-mods
-claude plugin install context-bar@zied-mods
-claude plugin install crab-buddy@zied-mods
-```
-
-Then restart Claude Code.
-
-You can also run from inside Claude Code: `/plugin marketplace add ziedgithub/claude-code-mods`, then `/plugin install`.
-
-Built and tested on Claude Code 2.1.289. Mods need a release recent enough to load function hooks (`hooks/hooks.json` with `modules`).
 
 ## Run from a clone
 

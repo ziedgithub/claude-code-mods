@@ -16,8 +16,9 @@ On a narrow terminal the labels shorten, and when one row can't hold everything 
 ## Install
 
 ```sh
-claude plugin marketplace add ziedgithub/claude-code-mods
-claude plugin install context-bar@zied-mods
+claude plugin marketplace add ziedgithub/claude-code-mods && claude plugin install context-bar@zied-mods
 ```
+
+Then restart Claude Code.
 
 See the [repository README](../README.md) for running it from a clone.

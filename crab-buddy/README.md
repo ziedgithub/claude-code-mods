@@ -47,8 +47,9 @@ The crab draws in the terminal only.
 ## Install
 
 ```sh
-claude plugin marketplace add ziedgithub/claude-code-mods
-claude plugin install crab-buddy@zied-mods
+claude plugin marketplace add ziedgithub/claude-code-mods && claude plugin install crab-buddy@zied-mods
 ```
+
+Then restart Claude Code.
 
 See the [repository README](../README.md) for running it from a clone.
