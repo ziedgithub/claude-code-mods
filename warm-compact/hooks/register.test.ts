@@ -1,5 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { CHIP_ROW_KEY, splitChipRow } from './chips'
+
 const MIN = 60_000
 const SUMMARY = [{ role: 'user', text: 'The conversation so far.', toolUses: [] }]
 const USAGE = { input_tokens: 10, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 500, output_tokens: 100 }
@@ -181,6 +183,19 @@ const chipOf = async ($: any) => {
     pressKeepWarm: () => footer.press({ key: 'keep-warm' }),
   }
 }
+
+test('both chips sit on one row under the hint line, which another mod with chips may share', async ($, on) => {
+  engine(on)
+  await $.session.start(START)
+  const footer = await $.ui.mount({ plugin: 'warm-compact', surface: 'terminal', component: 'PromptHint', props: { isDraft: false, isWorking: false, hint: '? for shortcuts' }, requestId: 'hint', viewport: { columns: 120, rows: 40 } })
+  const drawn: any = await footer.drawn()
+  expect(drawn.props.flexDirection).toBe('column')
+  const [line, row] = drawn.children
+  expect(row.props.key).toBe(CHIP_ROW_KEY)
+  expect(row.children.map((chip: any) => chip.children[1].children[0])).toEqual(['Warm compact', 'Keep warm'])
+  // Drawn over by another such mod, the chips are handed over whole for it to add its own to
+  expect(splitChipRow(drawn)).toEqual({ above: [line], chips: row.children })
+})
 
 const run = ($: any, args: string) => $.command.run({ command: 'warm-compact', args })
 const runKeepWarm = ($: any, args: string) => $.command.run({ command: 'keep-warm', args })

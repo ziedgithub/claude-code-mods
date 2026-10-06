@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { CacheTtl, CompactionRecord, CompactionUsage } from '../types'
+import { CHIP_ROW_KEY, splitChipRow } from './chips'
 import { DEFAULT_TTL, TTL_MS, hitPercent, inferRenewTtl, inferTtl, isCacheTtl, plan, warnText } from './plan'
 import { MAX_RECORDS, clockTime, compactionHit, noticeText, recordsOf, statsText } from './savings'
 
@@ -347,26 +348,30 @@ export const register: Register = (on, options) => {
     return { text: turnText('Keep warm', isOn) }
   })
 
-  // The chips go on rows of their own under the hint line, which the engine still draws
+  // The chips go on the row of chips under the hint line, which the engine still draws: the
+  // one another mod's chips already started, or a row of their own
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
-    const line = await next(e)
+    const { above, chips } = splitChipRow(await next(e))
     const { Box, Text, Button } = $.ui.resolve(e)
     const isCompactOn = await read($, isEnabled)
     const isKeepWarmOn = await read($, isKeepWarm)
     return (
       <Box flexDirection="column">
-        {line}
-        <Box gap={1}>
-          <Box backgroundColor={isCompactOn ? ON_COLOR : OFF_COLOR}>
-            <Button key="toggle" label={chipLabel(isCompactOn)} plain onPress={() => void turn($, !isCompactOn)} />
+        {above}
+        <Box key={CHIP_ROW_KEY} columnGap={2} flexWrap="wrap">
+          {chips}
+          <Box gap={1}>
+            <Box backgroundColor={isCompactOn ? ON_COLOR : OFF_COLOR}>
+              <Button key="toggle" label={chipLabel(isCompactOn)} plain onPress={() => void turn($, !isCompactOn)} />
+            </Box>
+            <Text dimColor>{COMPACT_LABEL}</Text>
           </Box>
-          <Text dimColor>{COMPACT_LABEL}</Text>
-        </Box>
-        <Box gap={1}>
-          <Box backgroundColor={isKeepWarmOn ? ON_COLOR : OFF_COLOR}>
-            <Button key="keep-warm" label={chipLabel(isKeepWarmOn)} plain onPress={() => void turnKeepWarm($, !isKeepWarmOn)} />
+          <Box gap={1}>
+            <Box backgroundColor={isKeepWarmOn ? ON_COLOR : OFF_COLOR}>
+              <Button key="keep-warm" label={chipLabel(isKeepWarmOn)} plain onPress={() => void turnKeepWarm($, !isKeepWarmOn)} />
+            </Box>
+            <Text dimColor>{KEEP_WARM_LABEL}</Text>
           </Box>
-          <Text dimColor>{KEEP_WARM_LABEL}</Text>
         </Box>
       </Box>
     )

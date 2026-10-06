@@ -23,12 +23,11 @@ Headless runs (`claude -p`) are left alone.
 
 ## Turning it off for a session
 
-Two chips sit on their own rows under the prompt, below the mode line:
+Two chips sit side by side on one row under the prompt, below the mode line, a row they share with the chips of any other mod that puts its own there:
 
 ```
 ⏸ manual mode on · ? for shortcuts
- on   Warm compact
- off  Keep warm
+ on   Warm compact   off  Keep warm
 ```
 
 Click `Warm compact` to turn it off for this session, and again to turn it back on. Turning it off during the countdown cancels it.

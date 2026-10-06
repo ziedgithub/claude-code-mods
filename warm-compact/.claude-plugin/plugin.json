@@ -1,6 +1,6 @@
 {
   "name": "warm-compact",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Compacts an idle session just before its prompt cache goes cold, or keeps the cache warm while you're away, so your next prompt doesn't re-read the whole conversation uncached. Two chips under the prompt, /warm-compact and /keep-warm turn each on or off for a session.",
   "author": {
     "name": "Zied BEN AMAR",
