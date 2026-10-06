@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { CacheTtl, ContextAction, ContextFill, ModelInfo, Question, Setting } from '../types'
+import type { CacheInfo, CacheTtl, ContextAction, ContextFill, ModelInfo, Question, Setting } from '../types'
 import { COLD_TEXT, DEFAULT_TTL, formatRemaining, hitColor, hitPercent, inferTtl, isCacheTtl, remainingMs } from './cache'
 
 const BAR_MIN = 3
@@ -17,6 +17,7 @@ const MODEL_POLL_MS = 1000
 const FILL_POLL_MS = 1000
 const CACHE_TICK_MS = 1000
 const CACHE_TTL_KEY = 'cacheTtl'
+const RENEW_TTL_KEY = 'renewTtl'
 const COLD_COLOR = '#58a6ff'
 const CONFIRM_MS = 5000
 const CHOOSE_MS = 10000
@@ -235,8 +236,12 @@ let askTimer: Timer | null = null
 // The cache's countdown is drawn from the clock's last reading, and the footer drawn again
 // only when its text changes: once a minute, then once a second for the last one
 let cacheTtl: CacheTtl = DEFAULT_TTL
+// How long a fork's entry lasts, once a request after one has told; until then, a request's
+let renewTtl: CacheTtl | null = null
 let cacheNow = 0
 let shownRemaining = ''
+
+const ttlOf = (info: CacheInfo): CacheTtl => (info.isFork === true ? (renewTtl ?? cacheTtl) : cacheTtl)
 
 const tickCache = async ($: EngineInterface): Promise<void> => {
   cacheNow = await $.clock.now()
@@ -244,7 +249,7 @@ const tickCache = async ($: EngineInterface): Promise<void> => {
   // A model switch makes no request, so the clock sees it too
   const name = (await read($, model))?.name ?? null
   let text = ''
-  if (info !== null) text = name !== null && name !== info.model ? COLD_TEXT : formatRemaining(remainingMs(info, cacheTtl, cacheNow))
+  if (info !== null) text = name !== null && name !== info.model ? COLD_TEXT : formatRemaining(remainingMs(info, ttlOf(info), cacheNow))
   if (text === shownRemaining) return
   shownRemaining = text
   $.ui.invalidate('ui.render')
@@ -256,6 +261,14 @@ const learnTtl = async ($: EngineInterface, ttl: CacheTtl | null): Promise<void>
   if (ttl === null || ttl === cacheTtl) return
   cacheTtl = ttl
   await $.store.set(CACHE_TTL_KEY, ttl)
+}
+
+// A fork's entry is told apart the same way, by the first request after a long enough pause.
+// On an account that caches for five minutes it can last no less
+const learnRenewTtl = async ($: EngineInterface, ttl: CacheTtl | null): Promise<void> => {
+  if (ttl === null || ttl === renewTtl || cacheTtl !== '1h') return
+  renewTtl = ttl
+  await $.store.set(RENEW_TTL_KEY, ttl)
 }
 
 // Passes the response on as it streams, seeing each chunk on the way
@@ -354,6 +367,8 @@ export const register: Register = on => {
     $.clock.every(FILL_POLL_MS, () => void estimateMissingFill($))
     const stored = await $.store.get(CACHE_TTL_KEY)
     if (isCacheTtl(stored)) cacheTtl = stored
+    const storedRenewTtl = await $.store.get(RENEW_TTL_KEY)
+    if (isCacheTtl(storedRenewTtl)) renewTtl = storedRenewTtl
     cacheNow = await $.clock.now()
     $.clock.every(CACHE_TICK_MS, () => void tickCache($))
     return next(e)
@@ -378,10 +393,27 @@ export const register: Register = on => {
       if (chunk.kind !== 'stop' || chunk.usage === null) return
       const hit = hitPercent(chunk.usage)
       const prev = await read($, cache)
-      if (e.index === 0 && hit !== null && prev !== null) await learnTtl($, inferTtl(prev, name, hit, requestAt))
+      if (e.index === 0 && hit !== null && prev !== null) {
+        const ttl = inferTtl(prev, name, hit, requestAt)
+        await (prev.isFork === true ? learnRenewTtl($, ttl) : learnTtl($, ttl))
+      }
       const hitNow = e.index === 0 || prev === null ? (hit ?? prev?.hitPercent ?? 0) : prev.hitPercent
       await update($, cache, () => ({ hitPercent: hitNow, requestAt, model: name }))
     })
+  })
+
+  // A plugin's fork re-sends the main thread's last request with one more message after it,
+  // whichever plugin forks: it reads the conversation from the cache, or writes it there once
+  // the entry lapsed, and either way the entry starts over. Keep warm renews the cache so
+  on('model.fork', async ($, e, next) => {
+    const requestAt = await $.clock.now()
+    const result = await next(e)
+    const usage = result.value !== undefined && 'usage' in result.value ? result.value.usage : null
+    const hit = usage === null ? null : hitPercent(usage)
+    if (hit === null) return result
+    const name = await $.session.model()
+    await update($, cache, () => ({ hitPercent: hit, requestAt, model: name, isFork: true }))
+    return result
   })
 
   // `/effort` changes the level without a request: its answer row says to what
@@ -518,7 +550,7 @@ export const register: Register = on => {
       const percentText = `${cached.hitPercent}%`
       // The cache is per model: one switched to has none of the conversation yet
       const isSameModel = info === null || info.name === cached.model
-      const remaining = isSameModel ? formatRemaining(remainingMs(cached, cacheTtl, cacheNow)) : COLD_TEXT
+      const remaining = isSameModel ? formatRemaining(remainingMs(cached, ttlOf(cached), cacheNow)) : COLD_TEXT
       cacheLength = label.length + percentText.length + 1 + remaining.length
 
       cacheBlock = (

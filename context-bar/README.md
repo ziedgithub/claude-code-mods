@@ -6,6 +6,7 @@ A footer for Claude Code. In the slot right of the hint line under the prompt, i
 
 - **Cache**: how much of the last prompt the cache served, and roughly how long until it expires: `99% ~58m`, then `cold` once it has lapsed or after a compaction.
   - Whether your account caches for 5 minutes or an hour is worked out from the requests themselves, and remembered between sessions.
+  - When another mod renews the cache in the background (keep warm in warm-compact, or any mod that does the same), the countdown starts over too. The bar sees the renewal itself, so it does not need that mod installed. If the account keeps those renewals for only 5 minutes, the bar works that out the first time the cache turns out to be gone, and counts down 5 minutes after each renewal from then on.
 - **Model and effort**: `◆ Opus 5.5 (1M)  ▆ high`, colored by model family and by effort level. Click either one to get a row of chips and pick another. This runs `/model` or `/effort` for you.
 - **Context**: how full the context window is, in a bar that is green under 30%, orange under 60% and red after that.
   - After a compaction or a `/clear`, and in a fresh session, Claude Code has no measured figure until the next response. Meanwhile the bar shows Claude Code's own local estimate (the one `/context` makes), marked with `~`.

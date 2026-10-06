@@ -230,3 +230,93 @@ test('a fresh session shows the estimate before its first response', async ($, o
   await world.clock.advance(1000)
   expect(await percent()).toBe(' ~16%')
 })
+
+const MINUTE = 60_000
+const HIT = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 99_000, cache_creation_input_tokens: 990 }
+const MISS = { ...HIT, cache_read_input_tokens: 0, cache_creation_input_tokens: 99_990 }
+type Usage = typeof HIT
+
+// Beneath the mod as well: the conversation's requests and other plugins' forks, each costing
+// what `step` and `fork` say
+const cacheEngine = (on: any) => {
+  const world = { ...engine(on), step: HIT, fork: HIT as Usage | null }
+  on('turn.step', async function* (_$: unknown, e: { turnId: string; index: number }) {
+    yield { kind: 'stop' as const, stopReason: 'end_turn' as const, usage: world.step }
+    return { turnId: e.turnId, index: e.index, answer: 'ok', toolUses: [], stopReason: 'end_turn' as const, usage: world.step }
+  })
+  on('model.fork', async () => ({
+    value: world.fork === null ? { isAnswered: false, reason: 'nothing-to-fork' } : { isAnswered: true, text: 'ok', usage: world.fork },
+  }))
+  return world
+}
+
+// Another plugin, which forks the conversation on a command as keep warm's renewal does
+const KEEPER = {
+  name: 'keeper',
+  register(on: any) {
+    on('command.run', { command: 'renew' }, async ($: any) => {
+      await $.model.fork({ prompt: 'Reply with the single word: ok' })
+      return { text: '' }
+    })
+  },
+}
+
+const fork = async ($: any): Promise<void> => {
+  await $.command.run({ command: 'renew', args: '' })
+}
+
+const request = async ($: any, turnId: string): Promise<void> => {
+  for await (const _chunk of $.turn.step({ turnId, index: 0, model: 'claude-opus-5-5', messageCount: 1 }));
+}
+
+const cacheOf = async ($: any) => {
+  const footer = await $.ui.mount({ plugin: 'context-bar', surface: 'terminal', component: 'SessionMode', props: { modes: [] }, requestId: 'cache' })
+  return async (): Promise<string | undefined> => (await footer.find({ type: 'Text', text: /^ (~\d+[ms]|cold)$/ }))?.text
+}
+
+test("another plugin's fork renews the cache's countdown, and a compaction leaves it cold", { plugins: [KEEPER] }, async ($, on) => {
+  const world = cacheEngine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const remaining = await cacheOf($)
+  await request($, 't1')
+  await world.clock.advance(30 * MINUTE)
+  expect(await remaining()).toBe(' ~30m')
+
+  await fork($)
+  await world.clock.advance(1000)
+  expect(await remaining()).toBe(' ~60m')
+
+  await $.session.compact({ trigger: 'manual', messages: SUMMARY } as never)
+  await world.clock.advance(1000)
+  expect(await remaining()).toBe(' cold')
+})
+
+test('a fork with nothing to fork leaves the countdown as it was', { plugins: [KEEPER] }, async ($, on) => {
+  const world = cacheEngine(on)
+  world.fork = null
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const remaining = await cacheOf($)
+  await request($, 't1')
+  await world.clock.advance(30 * MINUTE)
+  await fork($)
+  await world.clock.advance(1000)
+  expect(await remaining()).toBe(' ~30m')
+})
+
+test("a fork's entry found gone before the hour makes later forks count down five minutes", { plugins: [KEEPER] }, async ($, on) => {
+  const world = cacheEngine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const remaining = await cacheOf($)
+  await request($, 't1')
+  await world.clock.advance(50 * MINUTE)
+  await fork($)
+  // Twenty minutes on, the conversation's next request finds the fork's entry gone
+  await world.clock.advance(20 * MINUTE)
+  world.step = MISS
+  await request($, 't2')
+  await world.clock.advance(1000)
+  expect(await remaining()).toBe(' ~60m')
+  await fork($)
+  await world.clock.advance(1000)
+  expect(await remaining()).toBe(' ~5m')
+})
