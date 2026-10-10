@@ -1,7 +1,7 @@
-import { atom, read, update } from 'claude-code'
+import { atom, memberOf, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { CacheInfo, CacheTtl, ContextAction, ContextFill, ModelInfo, Question, Setting } from '../types'
+import type { AgentStats, CacheInfo, CacheTtl, ContextAction, ContextFill, ModelInfo, Question, Setting } from '../types'
 import { COLD_TEXT, DEFAULT_TTL, formatRemaining, hitColor, hitPercent, inferTtl, isCacheTtl, remainingMs } from './cache'
 
 const BAR_MIN = 3
@@ -71,11 +71,21 @@ const EFFORT_CHIPS: Record<string, string> = {
 }
 const CURRENT_MARK = '✔'
 const CLOSE_ICON = '✕'
+// What a subagent's footer starts with, so its figures are not taken for the conversation's
+const AGENT_ICON = '↳'
+const AGENT_FALLBACK = 'agent'
+const AGENT_LABEL_MAX = 20
+// The window of a model other than the session's, which the engine reports for its own alone
+const DEFAULT_WINDOW = 200_000
+const LONG_WINDOW = 1_000_000
 
 const fill = atom({ plugin: 'context-bar', key: 'fill' } as const, null)
 const model = atom({ plugin: 'context-bar', key: 'model' } as const, null)
 const asking = atom({ plugin: 'context-bar', key: 'asking' } as const, null)
 const cache = atom({ plugin: 'context-bar', key: 'cache' } as const, null)
+const viewing = atom({ plugin: 'context-bar', key: 'viewing' } as const, null)
+// One member per agent, keyed by its id
+const agents = atom({ plugin: 'context-bar', key: 'agents' } as const, null)
 
 // The bar takes a twentieth of the terminal width, so it follows resizes
 export const barWidthFor = (columns: number): number =>
@@ -226,6 +236,26 @@ const estimateMissingFill = async ($: EngineInterface): Promise<void> => {
   if ((await read($, fill)) === null) await estimateFill($)
 }
 
+// The local count as a request left, and what its response then measured. The count is not
+// the measure, but what it grows by is near what the conversation grew by
+type Baseline = { counted: number; measured: number }
+let baseline: Baseline | null = null
+
+const countTokens = async ($: EngineInterface): Promise<{ tokens: number; window: number } | null> => {
+  const { context } = await $.session.usage({ breakdown: 'summary' })
+  const tokens = context.breakdown?.totalTokens
+  return tokens === undefined ? null : { tokens, window: context.window }
+}
+
+// The last measure, and what the conversation grew by since its request, as counted locally
+export const earlyTokens = (base: Baseline | null, counted: number): number | null =>
+  base === null ? null : base.measured + Math.max(0, counted - base.counted)
+
+// An early figure is shown only where it raises the bar: one that would not move the
+// percentage leaves the measured figure, so the `~` comes and goes only on a real jump
+export const raisedFill = (prev: ContextFill | null, early: ContextFill): ContextFill | null =>
+  prev !== null && early.percent <= prev.percent ? prev : early
+
 export const isAction = (question: Question): question is ContextAction => question in ACTIONS
 
 // A click only asks: the question that replaces the icons runs the command on `yes`, and
@@ -240,6 +270,10 @@ let cacheTtl: CacheTtl = DEFAULT_TTL
 let renewTtl: CacheTtl | null = null
 let cacheNow = 0
 let shownRemaining = ''
+
+// The agent in view as the band last told it; undefined until it tells after a load, so a
+// reload never keeps a view the person has since left
+let viewedAgent: string | null | undefined
 
 const ttlOf = (info: CacheInfo): CacheTtl => (info.isFork === true ? (renewTtl ?? cacheTtl) : cacheTtl)
 
@@ -351,6 +385,39 @@ export const estimatedFill = (tokens: number, window: number): ContextFill => ({
   isEstimate: true,
 })
 
+const bareModel = (id: string): string => id.replace(/\[1m\]$/, '')
+
+// A subagent on the session's model has the session's window; another model, its own default
+export const agentWindow = (agentModel: string, sessionModel: string, sessionWindow: number): number => {
+  if (agentModel.endsWith('[1m]')) return LONG_WINDOW
+  return bareModel(agentModel) === bareModel(sessionModel) ? sessionWindow : DEFAULT_WINDOW
+}
+
+// What the request was answered over: uncached, cache-read and cache-written input alike
+export const inputTokens = (usage: {
+  input_tokens: number
+  cache_read_input_tokens: number
+  cache_creation_input_tokens: number
+}): number => usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens
+
+// A response's own count of what it was answered over, as the engine measures it at turn end
+export const measuredFill = (tokens: number, window: number): ContextFill => ({
+  ...estimatedFill(tokens, window),
+  isEstimate: false,
+})
+
+export const agentFill = (stats: AgentStats | null): ContextFill | null =>
+  stats === null || stats.tokens === null ? null : measuredFill(stats.tokens, stats.window)
+
+// A subagent's effort is the one its request named, never a setting the person pinned
+export const agentModel = (stats: AgentStats | null): ModelInfo | null =>
+  stats === null ? null : { name: stats.model, effort: stats.effort, isEffortKnown: true, isEffortPinned: false }
+
+export const agentLabel = (info: { type: string; name?: string } | undefined): string => {
+  const label = info === undefined ? AGENT_FALLBACK : info.type === 'teammate' ? (info.name ?? info.type) : info.type
+  return label.length > AGENT_LABEL_MAX ? `${label.slice(0, AGENT_LABEL_MAX - 1)}…` : label
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const { context } = await $.session.usage()
@@ -371,6 +438,20 @@ export const register: Register = on => {
     if (isCacheTtl(storedRenewTtl)) renewTtl = storedRenewTtl
     cacheNow = await $.clock.now()
     $.clock.every(CACHE_TICK_MS, () => void tickCache($))
+    viewedAgent = undefined
+    return next(e)
+  })
+
+  // Only the band above the prompt is told which transcript is on screen, and told again on
+  // each switch: the footer follows it from there. It draws nothing of its own, and as a
+  // drawing writes no state, the footer is told from the clock
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const agentId = e.props.view?.agentId ?? null
+    if (agentId !== viewedAgent) {
+      viewedAgent = agentId
+      const label = agentId === null ? '' : agentLabel((await $.agent.list()).find(agent => agent.id === agentId))
+      $.clock.after(0, () => void update($, viewing, () => (agentId === null ? null : { id: agentId, label })))
+    }
     return next(e)
   })
 
@@ -380,17 +461,47 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // The effort is only known on a request, after any downgrade for the selected model
+  // The effort is only known on a request, after any downgrade for the selected model, and the
+  // window's fill on each response
   // The cache is read on each main-thread request; the first after a message says how much
   // of the conversation was still cached when it was sent
   on('turn.step', async function* ($, e, next) {
-    if (e.agentId !== undefined) return yield* next(e)
     const effort = e.effort === undefined ? null : String(e.effort)
+    // A subagent's requests are kept apart, for the footer to show while its transcript is
+    const agentId = e.agentId
+    if (agentId !== undefined) {
+      const { context } = await $.session.usage()
+      const window = agentWindow(e.model, await $.session.model(), context.window)
+      const stats = memberOf(agents, { requestId: agentId })
+      await update($, stats, prev => ({ model: e.model, effort, tokens: prev?.tokens ?? null, window }))
+      return yield* tap(next(e), async chunk => {
+        if (chunk.kind !== 'stop' || chunk.usage === null) return
+        const tokens = inputTokens(chunk.usage)
+        await update($, stats, prev => (prev === null ? prev : { ...prev, tokens }))
+      })
+    }
     const name = await $.session.model()
     await update($, model, prev => ({ name, effort, isEffortKnown: true, isEffortPinned: prev?.isEffortPinned ?? false }))
     const requestAt = await $.clock.now()
+    const { context } = await $.session.usage()
+    // What the conversation took on since the last response (tool results, the new prompt) is
+    // counted as the request leaves, without holding it, and shown until this one measures
+    let isMeasured = false
+    const counting = countTokens($).catch(() => null)
+    void counting.then(async counted => {
+      const tokens = counted === null ? null : earlyTokens(baseline, counted.tokens)
+      if (tokens === null || counted === null || isMeasured) return
+      const early = estimatedFill(tokens, counted.window)
+      await update($, fill, prev => (isMeasured ? prev : raisedFill(prev, early)))
+    })
     return yield* tap(next(e), async chunk => {
       if (chunk.kind !== 'stop' || chunk.usage === null) return
+      // Each response of a turn moves the bar, not only the turn's end
+      isMeasured = true
+      const tokens = inputTokens(chunk.usage)
+      await update($, fill, () => measuredFill(tokens, context.window))
+      const counted = await counting
+      baseline = counted === null ? null : { counted: counted.tokens, measured: tokens }
       const hit = hitPercent(chunk.usage)
       const prev = await read($, cache)
       if (e.index === 0 && hit !== null && prev !== null) {
@@ -427,6 +538,7 @@ export const register: Register = on => {
   on('session.end', async ($, e, next) => {
     if (e.reason !== 'clear') return next(e)
     carried = await read($, model)
+    baseline = null
     const result = await next(e)
     $.clock.after(0, () => void estimateFill($))
     return result
@@ -439,6 +551,7 @@ export const register: Register = on => {
   on('session.compact', async ($, e, next) => {
     const result = await next(e)
     if (e.trigger === 'precompute' || e.agentId !== undefined || result.skip !== undefined) return result
+    baseline = null
     $.clock.after(0, () => void estimateFill($))
     await update($, cache, prev => (prev === null ? prev : { ...prev, requestAt: null }))
     return result
@@ -447,11 +560,15 @@ export const register: Register = on => {
   // The footer's right-hand slot, which the engine lays out after the hint line. A tree
   // drawn for `PromptHint` instead shares a row with the mode label the engine puts ahead
   // of it, and any width it claims squeezes that label until its ` · ` wraps
+  // While an agent's transcript is on screen the footer shows that agent's model, effort and
+  // window, read-only: the picks, the cache and the actions are the conversation's
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
-    const current = await read($, fill)
-    const info = await read($, model)
+    const viewed = await read($, viewing)
+    const stats = viewed === null ? null : await read($, memberOf(agents, { requestId: viewed.id }))
+    const current = viewed === null ? await read($, fill) : agentFill(stats)
+    const info = viewed === null ? await read($, model) : agentModel(stats)
 
-    if (current === null && info === null) {
+    if (viewed === null && current === null && info === null) {
       return next(e)
     }
 
@@ -463,7 +580,7 @@ export const register: Register = on => {
     const beneath = await next(e)
 
     const parts = info === null ? null : modelParts(info)
-    const pending = await read($, asking)
+    const pending = viewed === null ? await read($, asking) : null
     const confirming = pending !== null && isAction(pending) ? pending : null
     // An effort pick is moot once the model in use takes none
     const choosing =
@@ -503,15 +620,22 @@ export const register: Register = on => {
       modelBlock = (
         <Box flexShrink={0}>
           <Text color={parts.modelColor}>{`${MODEL_ICON} `}</Text>
-          <Button key="model" label={parts.name} plain onPress={() => void ask($, 'model')} />
+          {viewed === null ? (
+            <Button key="model" label={parts.name} plain onPress={() => void ask($, 'model')} />
+          ) : (
+            <Text>{parts.name}</Text>
+          )}
           {parts.effort !== null && (
             <Text color={parts.effort.color}>
               {`${' '.repeat(EFFORT_GAP)}${parts.effort.icon === '' ? '' : `${parts.effort.icon} `}`}
             </Text>
           )}
-          {parts.effort !== null && (
-            <Button key="effort" label={parts.effort.label} plain onPress={() => void ask($, 'effort')} />
-          )}
+          {parts.effort !== null &&
+            (viewed === null ? (
+              <Button key="effort" label={parts.effort.label} plain onPress={() => void ask($, 'effort')} />
+            ) : (
+              <Text>{parts.effort.label}</Text>
+            ))}
         </Box>
       )
     }
@@ -543,7 +667,7 @@ export const register: Register = on => {
 
     let cacheBlock = null
     let cacheLength = 0
-    const cached = await read($, cache)
+    const cached = viewed === null ? await read($, cache) : null
 
     if (cached !== null) {
       const label = columns < COMPACT_BELOW ? '' : 'Cache '
@@ -564,8 +688,11 @@ export const register: Register = on => {
       )
     }
 
+    const agentText = viewed === null ? '' : `${AGENT_ICON} ${viewed.label}`
+    const agentBlock = agentText === '' ? null : <Text dimColor>{agentText}</Text>
+
     const actions =
-      confirming === null ? (
+      viewed !== null ? null : confirming === null ? (
         <Box flexShrink={0} gap={ACTION_GAP}>
           {CONTEXT_ACTIONS.map(action => (
             <Box backgroundColor={ACTIONS[action].color}>
@@ -587,14 +714,20 @@ export const register: Register = on => {
         </Box>
       )
 
-    const blocks = [cacheLength, modelLength, barLength, actionsLength(confirming), modesText.length].filter(
-      n => n > 0,
-    )
+    const blocks = [
+      agentText.length,
+      cacheLength,
+      modelLength,
+      barLength,
+      viewed === null ? actionsLength(confirming) : 0,
+      modesText.length,
+    ].filter(n => n > 0)
     const rightLength = blocks.reduce((sum, n) => sum + n, 0) + BLOCK_GAP * (blocks.length - 1)
 
     if (fitsInRow(columns, rightLength)) {
       return (
         <Box flexShrink={0} gap={BLOCK_GAP}>
+          {agentBlock}
           {cacheBlock}
           {modelBlock}
           {bar}
@@ -606,6 +739,7 @@ export const register: Register = on => {
 
     return (
       <Box flexShrink={0} flexDirection="column" alignItems="flex-end">
+        {agentBlock}
         {cacheBlock}
         {modelBlock}
         {bar}

@@ -16,6 +16,13 @@ export type CacheTtl = '5m' | '1h'
 // entry may not last as long as one a request of the conversation leaves
 export type CacheInfo = { hitPercent: number; requestAt: number | null; model: string; isFork?: boolean }
 
+// The agent whose transcript the person opened from the tasks list. `label`: its type, or a
+// teammate's name
+export type AgentView = { id: string; label: string }
+// What a subagent's own requests told: the model and effort its last one named, and the input
+// tokens it was answered over (null until its first response) against `window`
+export type AgentStats = { model: string; effort: string | null; tokens: number | null; window: number }
+
 declare module 'claude-code' {
   interface PluginState {
     'context-bar': {
@@ -23,6 +30,8 @@ declare module 'claude-code' {
       model: ModelInfo | null
       asking: Question | null
       cache: CacheInfo | null
+      viewing: AgentView | null
+      agents: StateFamily<AgentStats | null>
     }
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "context-bar",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "A footer showing the model and effort, how full the context window is, and the prompt cache, with one-click compact and clear",
   "author": { "name": "Zied BEN AMAR", "url": "https://github.com/ziedgithub" },
   "homepage": "https://github.com/ziedgithub/claude-code-mods/tree/main/context-bar",
