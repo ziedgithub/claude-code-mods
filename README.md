@@ -36,14 +36,14 @@ claude plugin marketplace update zied-mods && claude plugin update context-bar@z
 
 **Remove**: `claude plugin uninstall crab-buddy@zied-mods` (or `context-bar@zied-mods`, `warm-compact@zied-mods`).
 
-Needs a recent Claude Code: built and tested on 2.1.289.
+Needs a recent Claude Code: built and tested on 2.1.296.
 
 ## What's inside
 
 | Mod | What it does |
 | --- | --- |
 | [**context-bar**](context-bar/) | A footer showing the model and effort, how full the context window is, and the prompt cache, with one-click compact and clear. |
-| [**crab-buddy**](crab-buddy/) | A pixel-art Claude crab above the prompt that works, thinks, cheers and sleeps along with your session, plus a small crab in its own color for each subagent. |
+| [**crab-buddy**](crab-buddy/) | A pixel-art Claude crab above the prompt that works, thinks, cheers and sleeps along with your session, plus a small crab for each subagent, dressed for its kind of work. |
 | [**warm-compact**](warm-compact/) | Compacts an idle session a minute before its prompt cache goes cold, so your next prompt starts from a short summary instead of re-reading the whole conversation uncached. Or, with keep warm on, renews the cache while you're away and keeps the whole conversation. Two chips under the prompt turn each on or off. |
 
 ![crab-buddy in action](docs/crab-buddy.gif)

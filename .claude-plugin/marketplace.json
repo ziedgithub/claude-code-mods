@@ -19,8 +19,8 @@
     {
       "name": "crab-buddy",
       "source": "./crab-buddy",
-      "description": "A pixel-art Claude crab above the prompt that works, thinks, cheers and sleeps with the session, with a small crab in its own color for each subagent",
-      "version": "0.1.0",
+      "description": "A pixel-art Claude crab above the prompt that works, thinks, cheers and sleeps with the session, with a small crab for each subagent, dressed for its kind of work",
+      "version": "0.2.0",
       "category": "fun",
       "homepage": "https://github.com/ziedgithub/claude-code-mods/tree/main/crab-buddy"
     },

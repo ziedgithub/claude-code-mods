@@ -1,9 +1,9 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { CLAUDE_COLOR, drawScene, paletteFor } from './crab'
+import { CLAUDE_COLOR, drawAgent, drawScene, paletteFor } from './crab'
 import type { Mood } from './crab'
 
-import { AGENT_COLORS, crewPhase, isThinkingChunk, pickAgentColor, sceneOf, SPARE_AGENT_COLORS } from './register'
+import { AGENT_COSTUMES, costumeOf, crewPhase, isThinkingChunk, pickAgentColor, sceneOf, SPARE_AGENT_COLORS } from './register'
 
 test('isThinkingChunk thinks from a piece of thinking until text, a tool call or the stop', () => {
   expect(isThinkingChunk('thinking', false)).toBe(true)
@@ -14,9 +14,7 @@ test('isThinkingChunk thinks from a piece of thinking until text, a tool call or
 
 const spare = (place: number): number => SPARE_AGENT_COLORS[place] ?? -1
 
-test('pickAgentColor gives built-in types their own color and any other a spare one kept for it', () => {
-  expect(pickAgentColor('Explore', {})).toBe(0x3fb950)
-  expect(pickAgentColor('general-purpose', {})).toBe(0x58a6ff)
+test('pickAgentColor gives a fork the crab\'s color and any other type a spare one kept for it', () => {
   expect(pickAgentColor('fork', {})).toBe(CLAUDE_COLOR)
   expect(pickAgentColor('reviewer', {})).toBe(spare(0))
   expect(pickAgentColor('reviewer', { auditor: spare(0) })).toBe(spare(1))
@@ -24,8 +22,38 @@ test('pickAgentColor gives built-in types their own color and any other a spare 
   const full = Object.fromEntries(SPARE_AGENT_COLORS.map((color, i) => [`type-${i}`, color]))
   expect(SPARE_AGENT_COLORS).toContain(pickAgentColor('one-more', full))
   expect(pickAgentColor('one-more', full)).toBe(pickAgentColor('one-more', full))
-  // No spare repeats a built-in type's color
-  for (const color of SPARE_AGENT_COLORS) expect(Object.values(AGENT_COLORS)).not.toContain(color)
+  // No spare is the crab's own color
+  expect(SPARE_AGENT_COLORS).not.toContain(CLAUDE_COLOR)
+})
+
+test('costumeOf dresses each built-in type for its work and any other by the words of its name', () => {
+  expect(costumeOf('general-purpose')).toBe('chef')
+  expect(costumeOf('Explore')).toBe('explorer')
+  expect(costumeOf('Plan')).toBe('planner')
+  expect(costumeOf('claude-code-guide')).toBe('scholar')
+  expect(costumeOf('statusline-setup')).toBe('mechanic')
+  expect(costumeOf('claude')).toBe('wizard')
+  expect(costumeOf('fork')).toBe(null)
+  expect(Object.keys(AGENT_COSTUMES).length).toBe(7)
+  // A project's own agents and a plugin's, past its prefix; the last word naming work wins
+  expect(costumeOf('implementer')).toBe('builder')
+  expect(costumeOf('planner')).toBe('planner')
+  expect(costumeOf('spec-reviewer')).toBe('reviewer')
+  expect(costumeOf('reviewer-security')).toBe('reviewer')
+  expect(costumeOf('compound-engineering:ce-repo-research-analyst')).toBe('explorer')
+  expect(costumeOf('compound-engineering:ce-architecture-strategist')).toBe('planner')
+  expect(costumeOf('compound-engineering:ce-ankane-readme-writer')).toBe('scholar')
+  expect(costumeOf('compound-engineering:ce-figma-design-sync')).toBe('designer')
+  expect(costumeOf('codeReviewer')).toBe('reviewer')
+  // The longest match wins; a two-letter word matches a whole word only
+  expect(costumeOf('devops-agent')).toBe('mechanic')
+  expect(costumeOf('docker-runner')).toBe('mechanic')
+  expect(costumeOf('frontend-developer')).toBe('builder')
+  expect(costumeOf('ui-polisher')).toBe('designer')
+  expect(costumeOf('quick-agent')).toBe(null)
+  // No word, no costume; nor from the names objects carry
+  expect(costumeOf('my-plugin:zebra')).toBe(null)
+  expect(costumeOf('constructor')).toBe(null)
 })
 
 test('crewPhase reads an agent status as walking, waiting, done or gone', () => {
@@ -38,17 +66,25 @@ test('crewPhase reads an agent status as walking, waiting, done or gone', () => 
   expect(crewPhase('killed')).toBe(null)
 })
 
-test('sceneOf shows eight small crabs and counts the rest', () => {
-  const member = { color: 0x58a6ff, phase: 'running' as const, isThinking: false, since: 0, isListed: true }
-  const scene = sceneOf('idle', Array.from({ length: 10 }, () => member), 0)
-  expect(scene.minis.length).toBe(8)
-  expect(scene.hidden).toBe(2)
-  expect(scene.minis[0]).toEqual({ color: 0x58a6ff, mood: 'working' })
+test('sceneOf shows up to eight small crabs and counts the rest, fewer beside a smaller crab on a phone', () => {
+  const member = { color: CLAUDE_COLOR, costume: 'builder' as const, phase: 'running' as const, isThinking: false, since: 0, isListed: true }
+  const members = Array.from({ length: 10 }, () => member)
+  const wide = sceneOf('idle', members, 0, 200)
+  expect(wide.isCompact).toBe(false)
+  expect(wide.minis.length).toBe(8)
+  expect(wide.hidden).toBe(2)
+  expect(wide.minis[0]).toEqual({ color: CLAUDE_COLOR, mood: 'working', costume: 'builder' })
+  const phone = sceneOf('idle', members, 0, 48)
+  expect(phone.isCompact).toBe(true)
+  expect(phone.minis.length).toBe(3)
+  expect(phone.hidden).toBe(7)
+  expect(sceneOf('idle', members, 0, 79).isCompact).toBe(true)
+  expect(sceneOf('idle', members, 0, 80).isCompact).toBe(false)
 })
 
 // Every frame the crab alone draws in a mood, over its longest cycle
 const framesOf = (mood: Mood): Set<string> =>
-  new Set(Array.from({ length: 64 }, (_, tick) => drawScene({ mood, minis: [], hidden: 0, flights: [] }, tick).cells))
+  new Set(Array.from({ length: 64 }, (_, tick) => drawScene({ mood, minis: [], hidden: 0, flights: [], isCompact: false }, tick).cells))
 
 const decode = (cells: string): number[] => Array.from(new Uint32Array(Uint8Array.fromBase64(cells).buffer))
 const BAND = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120 } as never
@@ -63,6 +99,8 @@ const engine = (on: any, store: Record<string, unknown> = {}) => {
   on('turn.start', async (_$: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
   on('turn.complete', async () => ({ text: '' }))
   on('agent.spawn', async () => ({ model: 'claude-haiku-4-5', agentId: 'a1' }))
+  // The engine's own band, which the crab draws over: empty with no survey
+  on('ui.render', async ($: any, e: unknown) => h($.ui.resolve(e).Box, null))
   on('ui.blit', async (_$: unknown, e: { cells?: string }) => {
     if (e.cells !== undefined) world.blits.push(e.cells)
     return { value: {} }
@@ -110,7 +148,7 @@ const SPAWN = {
   fork: false,
 }
 
-test('a subagent gets a small crab in its type color that thinks, works, cheers, then leaves', async ($, on) => {
+test('a subagent gets a small crab dressed for its type that thinks, works, cheers, then leaves', async ($, on) => {
   const world = engine(on)
   const { clock } = world
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -121,19 +159,19 @@ test('a subagent gets a small crab in its type color that thinks, works, cheers,
   }
   const cell = (words: number[], columns: number, row: number, column: number) =>
     words.slice((row * columns + column) * 3, (row * columns + column) * 3 + 3)
-  expect((await raster()).columns).toBe(20)
+  expect((await raster()).columns).toBe(19)
 
   await $.agent.spawn({ ...SPAWN, subagentType: 'Explore' } as never)
   world.agents = [{ id: 'a1', description: 'look around', type: 'Explore', status: 'running' }]
   await clock.advance(500)
   const spawned = await raster()
-  expect(spawned.columns).toBe(8 + 20)
-  // Its head's light edge, in Explore's green
-  const green = paletteFor(0x3fb950)
-  expect(cell(spawned.words, spawned.columns, 2, 1)).toEqual([0x2580, green.H, green.H])
+  expect(spawned.columns).toBe(11 + 19)
+  // Explore's khaki helmet, its band over its brim, on a face in the crab's own color
+  expect(cell(spawned.words, spawned.columns, 1, 1)).toEqual([0x2580, 0x7a5a2e, 0xc8a165])
+  expect(cell(spawned.words, spawned.columns, 2, 1)).toEqual([0x20, 0x01000000, CLAUDE_COLOR])
 
-  // Its own step: a bubble over its head while it thinks, gone once it writes
-  const bubbles = () => world.blits.map(decode).filter(words => cell(words, 28, 1, 6)[1] === 0xd2a8ff).length
+  // Its own step: a bubble over it while it thinks, gone once it writes
+  const bubbles = () => world.blits.map(decode).filter(words => cell(words, 30, 0, 7)[1] === 0xd2a8ff).length
   world.blits.length = 0
   const reading = readAll($.turn.step({ turnId: 's1', index: 0, model: 'claude-haiku-4-5', messageCount: 1, agentId: 'a1' }))
   await clock.advance(900)
@@ -149,25 +187,42 @@ test('a subagent gets a small crab in its type color that thinks, works, cheers,
   await $.turn.complete({ reason: 'answer', answer: 'ok', durationMs: 1, isAborted: false, turnId: 's1', agentId: 'a1' } as never)
   world.agents = [{ id: 'a1', description: 'look around', type: 'Explore', status: 'completed' }]
   await clock.advance(1000)
-  const sparks = world.blits.map(decode).filter(words => [0, 6].some(column => cell(words, 28, 1, column)[1] === 0xe3b341))
+  const sparks = world.blits.map(decode).filter(words => [7, 8].some(column => cell(words, 30, 0, column)[1] === 0xe3b341))
   expect(sparks.length).toBeGreaterThan(0)
   await clock.advance(5000)
-  expect((await raster()).columns).toBe(20)
+  expect((await raster()).columns).toBe(19)
 })
 
-test('a type the store already gave a color keeps it in a new session', async ($, on) => {
+test('a narrow band, as on a phone, draws the smaller crab flush right, no glyph columns past it', async ($, on) => {
+  const world = engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const band = await $.ui.mount({ plugin: 'crab-buddy', surface: 'terminal', component: 'AbovePrompt', props: { ...(BAND as object), bodyColumns: 48 } as never, requestId: 'band' })
+  const columns = async () => (await band.find({ type: 'Raster' }))?.props.columns
+  expect(await columns()).toBe(12)
+  await $.agent.spawn({ ...SPAWN, subagentType: 'Explore' } as never)
+  world.agents = [{ id: 'a1', description: 'look around', type: 'Explore', status: 'running' }]
+  await world.clock.advance(500)
+  expect(await columns()).toBe(11 + 12)
+  // No padding of its own: the engine keeps the room for its `[-]`
+  const box = await band.find({ type: 'Box' })
+  expect(box?.props.paddingRight).toBe(undefined)
+})
+
+test('a type no costume fits goes bare, in the color the store already gave it', async ($, on) => {
   const auditor = spare(3)
-  const world = engine(on, { agentColors: { 'my-plugin:auditor': auditor } })
+  const world = engine(on, { agentColors: { 'my-plugin:zebra': auditor } })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   const band = await $.ui.mount({ plugin: 'crab-buddy', surface: 'terminal', component: 'AbovePrompt', props: BAND, requestId: 'band' })
-  await $.agent.spawn({ ...SPAWN, subagentType: 'my-plugin:auditor' } as never)
-  world.agents = [{ id: 'a1', description: 'audit', type: 'my-plugin:auditor', status: 'running' }]
+  await $.agent.spawn({ ...SPAWN, subagentType: 'my-plugin:zebra' } as never)
+  world.agents = [{ id: 'a1', description: 'stripes', type: 'my-plugin:zebra', status: 'running' }]
   await world.clock.advance(500)
   const found = await band.find({ type: 'Raster' })
   const words = decode(found?.props.cells as string)
   const columns = found?.props.columns as number
   const at = (row: number, column: number) => words.slice((row * columns + column) * 3, (row * columns + column) * 3 + 3)
-  expect(at(2, 1)).toEqual([0x2580, paletteFor(auditor).H, paletteFor(auditor).H])
+  // Bare-headed, the top of its head in its own color
+  expect(at(1, 2)).toEqual([0x2584, paletteFor(auditor).H, 0x01000000])
+  expect(at(0, 2)).toEqual([0x20, 0x01000000, 0x01000000])
 })
 
 // A white envelope's paper anywhere in the two rows over the small crabs
@@ -185,7 +240,7 @@ test("a subagent's message and its final report fly from its small crab to the c
   await $.agent.spawn({ ...SPAWN, subagentType: 'Explore' } as never)
   world.agents = [{ id: 'a1', description: 'look around', type: 'Explore', status: 'running' }]
   await clock.advance(500)
-  const flying = () => world.blits.map(decode).filter(words => hasPaper(words, 28)).length
+  const flying = () => world.blits.map(decode).filter(words => hasPaper(words, 30)).length
 
   world.blits.length = 0
   await $.session.send({ to: 'main', text: 'Halfway there.', origin: { kind: 'model' }, agentId: 'a1' } as never)
@@ -214,5 +269,74 @@ test('a message from the main loop or to another subagent flies nowhere', async 
   world.blits.length = 0
   await $.session.send({ to: 'a1', text: 'Keep going.', origin: { kind: 'model' } } as never)
   await world.clock.advance(600)
-  expect(world.blits.map(decode).filter(words => hasPaper(words, 28)).length).toBe(0)
+  expect(world.blits.map(decode).filter(words => hasPaper(words, 30)).length).toBe(0)
+})
+
+const EXPLORER = { id: 'a1', description: 'look around', type: 'Explore', status: 'running' }
+const DEFAULT = 0x01000000
+const viewing = (agentId: string | undefined, props: object = {}) => ({ ...(BAND as object), ...props, view: agentId === undefined ? {} : { agentId } }) as never
+
+test("in an agent's transcript, the band shows its crab alone at the crab's own size, dressed for its work", async ($, on) => {
+  const world = engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.agent.spawn({ ...SPAWN, subagentType: 'Explore' } as never)
+  world.agents = [EXPLORER]
+  await world.clock.advance(500)
+  const band = await $.ui.mount({ plugin: 'crab-buddy', surface: 'terminal', component: 'AbovePrompt', props: viewing('a1'), requestId: 'band' })
+  const raster = async () => {
+    const found = await band.find({ type: 'Raster' })
+    return { columns: found?.props.columns, rows: found?.props.rows, words: decode(found?.props.cells as string) }
+  }
+  // The crab's 16 columns and its tool's 5, its explorer's helmet over it
+  const agent = await raster()
+  expect([agent.columns, agent.rows]).toEqual([21, 6])
+  expect(agent.words.includes(0xc8a165)).toBe(true)
+  // Painted in place as it works: a frame later, the same size
+  world.blits.length = 0
+  await world.clock.advance(500)
+  expect(world.blits.length).toBeGreaterThan(0)
+  for (const cells of world.blits) expect(decode(cells).length).toBe(21 * 6 * 3)
+  // A band short of rows for its hat draws its small crab
+  await band.redraw(viewing('a1', { maxRows: 5 }))
+  const small = await raster()
+  expect([small.columns, small.rows]).toEqual([10, 4])
+  // Back on the main conversation: the crab and its crew
+  await band.redraw(viewing(undefined))
+  expect([(await raster()).columns, (await raster()).rows]).toEqual([11 + 19, 4])
+})
+
+test("an agent's crab stays dressed in its transcript once it is done and gone from the band", async ($, on) => {
+  const world = engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.agent.spawn({ ...SPAWN, subagentType: 'Explore' } as never)
+  world.agents = [EXPLORER]
+  await world.clock.advance(500)
+  await $.turn.complete({ reason: 'answer', answer: 'ok', durationMs: 1, isAborted: false, turnId: 's1', agentId: 'a1' } as never)
+  world.agents = []
+  await world.clock.advance(6000)
+  const band = await $.ui.mount({ plugin: 'crab-buddy', surface: 'terminal', component: 'AbovePrompt', props: viewing('a1'), requestId: 'band' })
+  const found = await band.find({ type: 'Raster' })
+  expect([found?.props.columns, found?.props.rows]).toEqual([21, 6])
+  expect(decode(found?.props.cells as string).includes(0xc8a165)).toBe(true)
+})
+
+test('an agent in view the band never drew is dressed from the list', async ($, on) => {
+  const world = engine(on)
+  world.agents = [{ id: 'old', description: 'review it', type: 'spec-reviewer', status: 'completed' }]
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const band = await $.ui.mount({ plugin: 'crab-buddy', surface: 'terminal', component: 'AbovePrompt', props: viewing('old'), requestId: 'band' })
+  // A reviewer at rest, in its glasses, its clipboard at its side
+  expect((await band.find({ type: 'Raster' }))?.props.cells).toBe(drawAgent({ color: CLAUDE_COLOR, mood: 'idle', costume: 'reviewer' }, 0).cells)
+})
+
+test("a fork's crab in its transcript is the crab itself, at its laptop", async ($, on) => {
+  const world = engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.agent.spawn({ ...SPAWN, subagentType: 'fork' } as never)
+  world.agents = [{ id: 'a1', description: 'fork', type: 'fork', status: 'running' }]
+  await world.clock.advance(500)
+  const band = await $.ui.mount({ plugin: 'crab-buddy', surface: 'terminal', component: 'AbovePrompt', props: viewing('a1'), requestId: 'band' })
+  const found = await band.find({ type: 'Raster' })
+  expect([found?.props.columns, found?.props.rows]).toEqual([19, 4])
+  expect(framesOf('working').has(found?.props.cells as string)).toBe(true)
 })
