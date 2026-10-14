@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { formatRemaining, hitColor, hitPercent, inferTtl, isCacheTtl, remainingMs } from './cache'
+import { formatRemaining, hitColor, remainingMs, ttlOf } from './cache'
+import { hitPercent, inferRenewTtl, inferTtl, isCacheTtl } from './shared/cache-ttl'
 
 test('hitPercent is the share of the input the cache served', () => {
   expect(hitPercent({ input_tokens: 10, cache_read_input_tokens: 90, cache_creation_input_tokens: 0 })).toBe(90)
@@ -33,12 +34,26 @@ test('hitColor and isCacheTtl', () => {
 })
 
 test('inferTtl tells the TTL from a request after a pause between five minutes and an hour', () => {
-  const prev = { hitPercent: 99, requestAt: 0, model: 'claude-opus-5-5' }
+  const prev = { at: 0, model: 'claude-opus-5-5' }
   expect(inferTtl(prev, 'claude-opus-5-5', 98, 20 * 60_000)).toBe('1h')
   expect(inferTtl(prev, 'claude-opus-5-5', 2, 20 * 60_000)).toBe('5m')
   expect(inferTtl(prev, 'claude-opus-5-5', 30, 20 * 60_000)).toBe(null)
   expect(inferTtl(prev, 'claude-opus-5-5', 2, 4 * 60_000)).toBe(null)
   expect(inferTtl(prev, 'claude-opus-5-5', 2, 2 * 3_600_000)).toBe(null)
   expect(inferTtl(prev, 'claude-sonnet-5-5', 2, 20 * 60_000)).toBe(null)
-  expect(inferTtl({ ...prev, requestAt: null }, 'claude-opus-5-5', 98, 20 * 60_000)).toBe(null)
+  expect(inferTtl({ ...prev, at: null }, 'claude-opus-5-5', 98, 20 * 60_000)).toBe(null)
+})
+
+test("inferRenewTtl tells a fork's entry from what a read after it found, the tools' cache aside", () => {
+  expect(inferRenewTtl(0, 95, 20 * 60_000)).toBe('1h')
+  expect(inferRenewTtl(0, 30, 20 * 60_000)).toBe('5m')
+  expect(inferRenewTtl(0, 70, 20 * 60_000)).toBe(null)
+  expect(inferRenewTtl(0, 95, 3 * 60_000)).toBe(null)
+})
+
+test("ttlOf counts a fork's entry down on the renewal's TTL once it is known", () => {
+  const request = { hitPercent: 90, requestAt: 0, model: 'm' }
+  expect(ttlOf(request, { cache: '1h', renew: '5m' })).toBe('1h')
+  expect(ttlOf({ ...request, isFork: true }, { cache: '1h', renew: '5m' })).toBe('5m')
+  expect(ttlOf({ ...request, isFork: true }, { cache: '1h', renew: null })).toBe('1h')
 })

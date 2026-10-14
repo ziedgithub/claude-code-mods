@@ -7,10 +7,12 @@ import {
   agentModel,
   agentWindow,
   barWidthFor,
+  cardLines,
   choicesFor,
   chooserLength,
   colorFor,
   configuredEffort,
+  contextRows,
   displayModelName,
   earlyTokens,
   effortFromAnswer,
@@ -24,6 +26,8 @@ import {
   raisedFill,
   switchedModel,
   toFill,
+  tokenText,
+  upcomingText,
   withEffort,
 } from './register'
 
@@ -181,7 +185,7 @@ const SUMMARY = [{ role: 'user', text: 'The conversation so far.', toolUses: [] 
 const engine = (on: any) => {
   const clock = mock.clock(on)
   mock.store(on, {})
-  const world = { clock, measured: { percent: 60, tokens: 120000 } as { percent?: number; tokens?: number }, estimate: 31000 }
+  const world = { clock, measured: { percent: 60, tokens: 120000 } as { percent?: number; tokens?: number }, estimate: 31000, categories: [] as object[] }
   on('session.usage', async (_$: unknown, e: { breakdown?: string }) => ({
     value: {
       startedAt: 0,
@@ -189,7 +193,7 @@ const engine = (on: any) => {
       context: {
         window: 200000,
         ...world.measured,
-        ...(e.breakdown === undefined ? {} : { breakdown: { totalTokens: world.estimate, maxTokens: 200000, categories: [] } }),
+        ...(e.breakdown === undefined ? {} : { breakdown: { totalTokens: world.estimate, maxTokens: 200000, categories: world.categories } }),
       },
     },
   }))
@@ -227,6 +231,49 @@ test('a compaction shows the estimate until the next response measures the windo
   world.measured = { percent: 13, tokens: 26000 }
   await $.turn.complete(COMPLETE)
   expect(await percent()).toBe(' 13%')
+})
+
+test('a compaction waits for the engine to take the compacted conversation before estimating', async ($, on) => {
+  const world = engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const percent = await footerOf($)
+
+  // Until the engine has taken it, its measure stands and its estimate matches that measure
+  world.estimate = 120000
+  await $.session.compact({ trigger: 'manual', messages: SUMMARY } as never)
+  await world.clock.advance(200)
+  expect(await percent()).toBe(' 60%')
+
+  world.measured = {}
+  world.estimate = 31000
+  await world.clock.advance(100)
+  expect(await percent()).toBe(' ~16%')
+})
+
+test('a cleared session waits likewise for the engine to empty it', async ($, on) => {
+  const world = engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const percent = await footerOf($)
+  world.estimate = 120000
+  await $.session.end({ reason: 'clear', sessionId: 's1', resume: { sessionId: 's1' } } as never)
+  await world.clock.advance(200)
+  expect(await percent()).toBe(' 60%')
+
+  world.measured = {}
+  world.estimate = 24000
+  await world.clock.advance(100)
+  expect(await percent()).toBe(' ~12%')
+})
+
+test('an engine that never drops its measure gets the estimate after the wait', async ($, on) => {
+  const world = engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const percent = await footerOf($)
+  await $.session.compact({ trigger: 'manual', messages: SUMMARY } as never)
+  await world.clock.advance(9000)
+  expect(await percent()).toBe(' 60%')
+  await world.clock.advance(2000)
+  expect(await percent()).toBe(' ~16%')
 })
 
 test('a compaction computed ahead, vetoed, or of a subagent leaves the bar as it was', async ($, on) => {
@@ -315,6 +362,21 @@ test('a response after a compaction replaces the estimate', async ($, on) => {
   expect(await percent()).toBe(' ~16%')
   world.step = { ...MISS, cache_creation_input_tokens: 39_990 }
   await request($, 't1')
+  expect(await percent()).toBe(' 20%')
+})
+
+test('a response before the engine has taken the compaction is not overwritten by its estimate', async ($, on) => {
+  const world = cacheEngine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const footer = await $.ui.mount({ plugin: 'context-bar', surface: 'terminal', component: 'SessionMode', props: { modes: [] }, requestId: 'footer' })
+  const percent = async () => (await footer.find({ type: 'Text', text: /^ ~?\d+%$/ }))?.text
+  await $.session.compact({ trigger: 'manual', messages: SUMMARY } as never)
+  world.step = { ...MISS, cache_creation_input_tokens: 39_990 }
+  await request($, 't1')
+  expect(await percent()).toBe(' 20%')
+
+  world.measured = {}
+  await world.clock.advance(1000)
   expect(await percent()).toBe(' 20%')
 })
 
@@ -497,4 +559,125 @@ test('an agent in view with no request seen yet shows its label alone', async ($
   await world.clock.advance(1)
   expect(await footer.find({ type: 'Text', text: '↳ agent' })).toBeDefined()
   expect(await footer.find({ type: 'Text', text: /%$/ })).toBeUndefined()
+})
+
+// What /context lists: a category loaded on demand and an empty one among them
+const CATEGORIES = [
+  { name: 'System prompt', tokens: 3_100, color: 'promptBorder', isDeferred: false, kind: 'used' as const },
+  { name: 'System tools', tokens: 14_200, color: 'inactive', isDeferred: false, kind: 'used' as const },
+  { name: 'MCP tools', tokens: 0, color: 'ide', isDeferred: false, kind: 'used' as const },
+  { name: 'Deferred tools', tokens: 9_000, color: 'inactive', isDeferred: true, kind: 'deferred' as const },
+  { name: 'Messages', tokens: 98_500, color: 'claude', isDeferred: false, kind: 'used' as const },
+  { name: 'Free space', tokens: 51_200, color: 'subtle', isDeferred: false, kind: 'free' as const },
+  { name: 'Autocompact buffer', tokens: 33_000, color: 'warning', isDeferred: false, kind: 'buffer' as const },
+]
+
+test('contextRows leaves out what sits outside the window and what is empty', () => {
+  expect(contextRows(CATEGORIES, 200_000).map(row => [row.name, row.percent, row.kind])).toEqual([
+    ['System prompt', 2, 'used'],
+    ['System tools', 7, 'used'],
+    ['Messages', 49, 'used'],
+    ['Free space', 26, 'free'],
+    ['Autocompact buffer', 17, 'buffer'],
+  ])
+})
+
+test('tokenText keeps the figure short', () => {
+  expect(tokenText(850)).toBe('850')
+  expect(tokenText(3_100)).toBe('3.1k')
+  expect(tokenText(98_500)).toBe('99k')
+  expect(tokenText(1_200_000)).toBe('1.2M')
+})
+
+test('cardLines lines the columns up and pads every line to the width of the card', () => {
+  const { title, lines } = cardLines(contextRows(CATEGORIES, 200_000))
+  expect(lines.map(line => line.glyph + line.text)).toEqual([
+    ' ■ System prompt       3.1k   2% ',
+    ' ■ System tools         14k   7% ',
+    ' ■ Messages             99k  49% ',
+    ' □ Free space           51k  26% ',
+    ' ▒ Autocompact buffer   33k  17% ',
+  ])
+  expect(title).toBe(' What fills the context'.padEnd(33))
+  expect(lines.map(line => line.isDim)).toEqual([false, false, false, true, true])
+})
+
+test('upcomingText says what warm-compact runs and when', () => {
+  expect(upcomingText({ kind: 'compact', at: 41 * MINUTE, expiresAt: 42 * MINUTE }, 0)).toBe('⇊ Warm compact runs in ~41m, before the cache goes cold')
+  expect(upcomingText({ kind: 'renew', at: 30_000, expiresAt: 90_000 }, 0)).toBe('♨ Keep warm renews the cache in ~30s')
+  expect(upcomingText({ kind: 'compact', at: 0, expiresAt: MINUTE }, 1000)).toBe('⇊ Warm compact runs now, before the cache goes cold')
+})
+
+test('hovering the bar shows what fills the context, over the rows above it', async ($, on) => {
+  const world = engine(on)
+  world.measured = {}
+  world.categories = CATEGORIES
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const footer = await $.ui.mount({ plugin: 'context-bar', surface: 'terminal', component: 'SessionMode', props: { modes: [] }, requestId: 'footer' })
+  await world.clock.advance(1000)
+  const bar = await footer.find({ type: 'Box', key: 'context-card' })
+  // A drawn element carries its hover beside its props
+  const card = bar?.children.at(-1) as { props: Record<string, unknown>; hover?: unknown } | undefined
+  expect(card?.props).toMatchObject({ position: 'absolute', bottom: 1, right: 0, display: 'none' })
+  expect(card?.hover).toEqual({ display: 'flex' })
+  expect(await footer.find({ type: 'Text', text: ' Messages             99k  49% ' })).toBeDefined()
+  expect(await footer.find({ type: 'Text', text: 'Deferred tools' })).toBeUndefined()
+})
+
+// warm-compact as context-bar sees it: the values it publishes, set here on a command
+const WARM = {
+  name: 'warm-compact',
+  register(on: any) {
+    on('command.run', { command: 'warm' }, async ($: any, e: { args: string }) => {
+      const { ttl, upcoming } = JSON.parse(e.args)
+      if (ttl !== undefined) await $.state.set({ plugin: 'warm-compact', key: 'ttl' }, ttl)
+      if (upcoming !== undefined) await $.state.set({ plugin: 'warm-compact', key: 'upcoming' }, upcoming)
+      return { text: '' }
+    })
+  },
+}
+
+const warm = ($: any, values: object) => $.command.run({ command: 'warm', args: JSON.stringify(values) })
+
+test("while warm-compact is loaded the countdown runs on its TTL, and learns none of its own", { ...LONG, plugins: [WARM] }, async ($, on) => {
+  const world = cacheEngine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await warm($, { ttl: { cache: '5m', renew: null } })
+  const remaining = await cacheOf($)
+  await request($, 't1')
+  await world.clock.advance(1000)
+  expect(await remaining()).toBe(' ~5m')
+
+  // A miss twenty minutes on would tell the footer five minutes, were it learning
+  await warm($, { ttl: { cache: '1h', renew: null } })
+  await world.clock.advance(20 * MINUTE)
+  world.step = MISS
+  await request($, 't2')
+  await warm($, { ttl: null })
+  world.step = HIT
+  await request($, 't3')
+  await world.clock.advance(1000)
+  expect(await remaining()).toBe(' ~60m')
+})
+
+test("warm-compact's plan for the pause shows beside the countdown, with a card saying what and when", { ...LONG, plugins: [WARM] }, async ($, on) => {
+  const world = cacheEngine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const footer = await $.ui.mount({ plugin: 'context-bar', surface: 'terminal', component: 'SessionMode', props: { modes: [] }, requestId: 'footer' })
+  await request($, 't1')
+  const now = world.clock.now()
+  const at = { at: now + 59 * MINUTE, expiresAt: now + 60 * MINUTE }
+  await warm($, { ttl: { cache: '1h', renew: null }, upcoming: { kind: 'compact', ...at } })
+  await world.clock.advance(1000)
+  expect(await footer.find({ type: 'Text', text: ' ⇊' })).toBeDefined()
+  expect(await footer.find({ type: 'Text', text: ' ⇊ Warm compact runs in ~59m, before the cache goes cold ' })).toBeDefined()
+
+  await warm($, { upcoming: { kind: 'renew', ...at } })
+  await world.clock.advance(1000)
+  expect(await footer.find({ type: 'Text', text: ' ♨' })).toBeDefined()
+
+  await warm($, { upcoming: null })
+  await world.clock.advance(1000)
+  expect(await footer.find({ type: 'Text', text: ' ♨' })).toBeUndefined()
+  expect(await footer.find({ type: 'Text', text: /^ ~\d+m$/ })).toBeDefined()
 })

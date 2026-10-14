@@ -1,8 +1,10 @@
 import { atom, memberOf, read, update } from 'claude-code'
-import type { EngineInterface, Register, Timer } from 'claude-code'
+import type { ContextCategory, EngineInterface, Register, Timer } from 'claude-code'
 
-import type { AgentStats, CacheInfo, CacheTtl, ContextAction, ContextFill, ModelInfo, Question, Setting } from '../types'
-import { COLD_TEXT, DEFAULT_TTL, formatRemaining, hitColor, hitPercent, inferTtl, isCacheTtl, remainingMs } from './cache'
+import type { AgentStats, CacheInfo, CacheTtl, ContextAction, ContextFill, ContextRow, LearnedTtl, ModelInfo, Question, Setting, Upcoming } from '../types'
+import { COLD_TEXT, formatRemaining, hitColor, remainingMs, ttlOf } from './cache'
+import { DEFAULT_TTL, hitPercent, inferRenewTtl, inferTtl, isCacheTtl } from './shared/cache-ttl'
+import { tap } from './shared/stream'
 
 const BAR_MIN = 3
 const BAR_MAX = 8
@@ -78,6 +80,14 @@ const AGENT_LABEL_MAX = 20
 // The window of a model other than the session's, which the engine reports for its own alone
 const DEFAULT_WINDOW = 200_000
 const LONG_WINDOW = 1_000_000
+// The card over the bar, one row per category of what fills the window
+const CARD_TITLE = ' What fills the context '
+const ROW_GLYPHS: Record<ContextRow['kind'], string> = { used: '■', free: '□', buffer: '▒' }
+// What warm-compact has in store for the pause, beside the countdown it runs on
+const UPCOMING_STYLES: Record<Upcoming['kind'], { icon: string; color: string }> = {
+  compact: { icon: '⇊', color: '#58a6ff' },
+  renew: { icon: '♨', color: '#ffa657' },
+}
 
 const fill = atom({ plugin: 'context-bar', key: 'fill' } as const, null)
 const model = atom({ plugin: 'context-bar', key: 'model' } as const, null)
@@ -86,6 +96,10 @@ const cache = atom({ plugin: 'context-bar', key: 'cache' } as const, null)
 const viewing = atom({ plugin: 'context-bar', key: 'viewing' } as const, null)
 // One member per agent, keyed by its id
 const agents = atom({ plugin: 'context-bar', key: 'agents' } as const, null)
+const breakdown = atom({ plugin: 'context-bar', key: 'breakdown' } as const, null)
+// warm-compact's, while it is loaded: it acts on the cache, so the countdown runs on its figures
+const warmTtl = atom({ plugin: 'warm-compact', key: 'ttl' } as const, null)
+const warmUpcoming = atom({ plugin: 'warm-compact', key: 'upcoming' } as const, null)
 
 // The bar takes a twentieth of the terminal width, so it follows resizes
 export const barWidthFor = (columns: number): number =>
@@ -222,13 +236,29 @@ const refreshFill = async ($: EngineInterface): Promise<void> => {
   await update($, fill, prev => toFill(context) ?? prev)
 }
 
-// The engine measures the window on each response, and a compaction or a /clear leaves its
-// last measure behind: until the next response the bar shows the engine's own estimate, the
-// one /context makes, counted locally with no request
-const estimateFill = async ($: EngineInterface): Promise<void> => {
+// The window's categories as /context lists them, less the tool schemas loaded on demand,
+// which stay outside it, and the empty ones
+export const contextRows = (categories: readonly ContextCategory[], window: number): ContextRow[] =>
+  categories.flatMap(({ name, tokens, color, kind }) =>
+    kind === 'deferred' || tokens <= 0 ? [] : [{ name, tokens, percent: Math.round((tokens / window) * 100), color, kind }],
+  )
+
+// The engine's local count, as /context makes it with no request. What fills the window, by
+// category, goes to the card over the bar
+const countTokens = async ($: EngineInterface): Promise<{ tokens: number; window: number } | null> => {
   const { context } = await $.session.usage({ breakdown: 'summary' })
-  const tokens = context.breakdown?.totalTokens
-  if (tokens !== undefined) await update($, fill, () => estimatedFill(tokens, context.window))
+  const counted = context.breakdown
+  if (counted === undefined) return null
+  const rows = contextRows(counted.categories, counted.maxTokens)
+  if (JSON.stringify(await read($, breakdown)) !== JSON.stringify(rows)) await update($, breakdown, () => rows)
+  return { tokens: counted.totalTokens, window: context.window }
+}
+
+// The engine measures the window on each response, and a compaction or a /clear leaves its
+// last measure behind: until the next response the bar shows the engine's own estimate
+const estimateFill = async ($: EngineInterface): Promise<void> => {
+  const counted = await countTokens($)
+  if (counted !== null) await update($, fill, () => estimatedFill(counted.tokens, counted.window))
 }
 
 // A fresh session, and one `/clear` started, has no fill until its first response
@@ -241,10 +271,32 @@ const estimateMissingFill = async ($: EngineInterface): Promise<void> => {
 type Baseline = { counted: number; measured: number }
 let baseline: Baseline | null = null
 
-const countTokens = async ($: EngineInterface): Promise<{ tokens: number; window: number } | null> => {
-  const { context } = await $.session.usage({ breakdown: 'summary' })
-  const tokens = context.breakdown?.totalTokens
-  return tokens === undefined ? null : { tokens, window: context.window }
+// The engine takes the compacted or cleared conversation some time after the hooks have
+// returned, and until then its estimate still counts the old one, matched to the old measure:
+// the bar would keep its figure, with a `~`. It drops that measure once it has the new one,
+// so the estimate waits for that, on the free figures, and after TAKE_WAIT_MS stops waiting. A
+// response that measured the window meanwhile has the last word
+const TAKE_POLL_MS = 50
+const TAKE_WAIT_MS = 10_000
+let isAwaitingTake = false
+
+const estimateOnceTaken = async ($: EngineInterface, waitedMs = 0): Promise<void> => {
+  if (!isAwaitingTake) return
+  const { context } = await $.session.usage()
+  if (context.percent !== undefined && waitedMs < TAKE_WAIT_MS) {
+    $.clock.after(TAKE_POLL_MS, () => void estimateOnceTaken($, waitedMs + TAKE_POLL_MS))
+    return
+  }
+  const counted = await countTokens($)
+  await update($, fill, prev =>
+    !isAwaitingTake || counted === null ? prev : estimatedFill(counted.tokens, counted.window),
+  )
+  isAwaitingTake = false
+}
+
+const estimateWhenTaken = ($: EngineInterface): void => {
+  isAwaitingTake = true
+  $.clock.after(0, () => void estimateOnceTaken($))
 }
 
 // The last measure, and what the conversation grew by since its request, as counted locally
@@ -275,7 +327,9 @@ let shownRemaining = ''
 // reload never keeps a view the person has since left
 let viewedAgent: string | null | undefined
 
-const ttlOf = (info: CacheInfo): CacheTtl => (info.isFork === true ? (renewTtl ?? cacheTtl) : cacheTtl)
+// The TTLs the countdown runs on: warm-compact's while it is loaded, else the footer's own
+const ttlsOf = async ($: EngineInterface): Promise<LearnedTtl> =>
+  (await read($, warmTtl)) ?? { cache: cacheTtl, renew: renewTtl }
 
 const tickCache = async ($: EngineInterface): Promise<void> => {
   cacheNow = await $.clock.now()
@@ -283,7 +337,7 @@ const tickCache = async ($: EngineInterface): Promise<void> => {
   // A model switch makes no request, so the clock sees it too
   const name = (await read($, model))?.name ?? null
   let text = ''
-  if (info !== null) text = name !== null && name !== info.model ? COLD_TEXT : formatRemaining(remainingMs(info, ttlOf(info), cacheNow))
+  if (info !== null) text = name !== null && name !== info.model ? COLD_TEXT : formatRemaining(remainingMs(info, ttlOf(info, await ttlsOf($)), cacheNow))
   if (text === shownRemaining) return
   shownRemaining = text
   $.ui.invalidate('ui.render')
@@ -305,14 +359,13 @@ const learnRenewTtl = async ($: EngineInterface, ttl: CacheTtl | null): Promise<
   await $.store.set(RENEW_TTL_KEY, ttl)
 }
 
-// Passes the response on as it streams, seeing each chunk on the way
-async function* tap<T, R>(stream: AsyncGenerator<T, R>, see: (chunk: T) => Promise<void>): AsyncGenerator<T, R> {
-  for (;;) {
-    const step = await stream.next()
-    if (step.done === true) return step.value
-    await see(step.value)
-    yield step.value
-  }
+// The first request after a pause tells how long the entry the last read left lasts, a fork's
+// or a request's. While warm-compact is loaded it learns that itself, and the countdown runs on
+// its figures, so the two never disagree
+const learnFrom = async ($: EngineInterface, prev: CacheInfo, model: string, hit: number, requestAt: number): Promise<void> => {
+  if ((await read($, warmTtl)) !== null) return
+  if (prev.isFork !== true) return learnTtl($, inferTtl({ at: prev.requestAt, model: prev.model }, model, hit, requestAt))
+  if (prev.requestAt !== null && prev.model === model) await learnRenewTtl($, inferRenewTtl(prev.requestAt, hit, requestAt))
 }
 
 const ask = async ($: EngineInterface, question: Question): Promise<void> => {
@@ -418,6 +471,44 @@ export const agentLabel = (info: { type: string; name?: string } | undefined): s
   return label.length > AGENT_LABEL_MAX ? `${label.slice(0, AGENT_LABEL_MAX - 1)}…` : label
 }
 
+// 850, 3.1k, 98k, 1.2M: as short as the card's column allows
+export const tokenText = (tokens: number): string => {
+  if (tokens < 1000) return String(tokens)
+  if (tokens < 10_000) return `${(tokens / 1000).toFixed(1)}k`
+  if (tokens < 1_000_000) return `${Math.round(tokens / 1000)}k`
+  return `${(tokens / 1_000_000).toFixed(1)}M`
+}
+
+export type CardLine = { glyph: string; color: string; text: string; isDim: boolean }
+
+// The card's lines, each padded to its full width: drawn over the rows above the footer, it
+// covers every cell of them it spans. The window left and the compaction buffer are dimmed
+export const cardLines = (rows: readonly ContextRow[]): { title: string; lines: CardLine[] } => {
+  const nameWidth = Math.max(...rows.map(row => row.name.length))
+  const tokenWidth = Math.max(...rows.map(row => tokenText(row.tokens).length))
+  const lines = rows.map(row => ({
+    glyph: ` ${ROW_GLYPHS[row.kind]}`,
+    color: row.color,
+    text: ` ${row.name.padEnd(nameWidth)}  ${tokenText(row.tokens).padStart(tokenWidth)} ${`${row.percent}%`.padStart(4)} `,
+    isDim: row.kind !== 'used',
+  }))
+  const width = Math.max(CARD_TITLE.length, ...lines.map(line => line.glyph.length + line.text.length))
+  return {
+    title: CARD_TITLE.padEnd(width),
+    lines: lines.map(line => ({ ...line, text: line.text.padEnd(width - line.glyph.length) })),
+  }
+}
+
+// What the card over warm-compact's mark says: what runs, and when
+export const upcomingText = (coming: Upcoming, now: number): string => {
+  const ms = coming.at - now
+  const when = ms <= 0 ? 'now' : `in ${formatRemaining(ms)}`
+  const { icon } = UPCOMING_STYLES[coming.kind]
+  return coming.kind === 'compact'
+    ? `${icon} Warm compact runs ${when}, before the cache goes cold`
+    : `${icon} Keep warm renews the cache ${when}`
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const { context } = await $.session.usage()
@@ -438,6 +529,8 @@ export const register: Register = on => {
     if (isCacheTtl(storedRenewTtl)) renewTtl = storedRenewTtl
     cacheNow = await $.clock.now()
     $.clock.every(CACHE_TICK_MS, () => void tickCache($))
+    // A resumed session has a measure and no breakdown until its first request
+    $.clock.after(0, () => void countTokens($))
     viewedAgent = undefined
     return next(e)
   })
@@ -455,9 +548,11 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // The card over the bar takes in the turn's last answer
   on('turn.complete', async ($, e, next) => {
     await refreshFill($)
     await refreshModel($)
+    if (e.agentId === undefined) $.clock.after(0, () => void countTokens($))
     return next(e)
   })
 
@@ -498,16 +593,14 @@ export const register: Register = on => {
       if (chunk.kind !== 'stop' || chunk.usage === null) return
       // Each response of a turn moves the bar, not only the turn's end
       isMeasured = true
+      isAwaitingTake = false
       const tokens = inputTokens(chunk.usage)
       await update($, fill, () => measuredFill(tokens, context.window))
       const counted = await counting
       baseline = counted === null ? null : { counted: counted.tokens, measured: tokens }
       const hit = hitPercent(chunk.usage)
       const prev = await read($, cache)
-      if (e.index === 0 && hit !== null && prev !== null) {
-        const ttl = inferTtl(prev, name, hit, requestAt)
-        await (prev.isFork === true ? learnRenewTtl($, ttl) : learnTtl($, ttl))
-      }
+      if (e.index === 0 && hit !== null && prev !== null) await learnFrom($, prev, name, hit, requestAt)
       const hitNow = e.index === 0 || prev === null ? (hit ?? prev?.hitPercent ?? 0) : prev.hitPercent
       await update($, cache, () => ({ hitPercent: hitNow, requestAt, model: name }))
     })
@@ -540,19 +633,18 @@ export const register: Register = on => {
     carried = await read($, model)
     baseline = null
     const result = await next(e)
-    $.clock.after(0, () => void estimateFill($))
+    estimateWhenTaken($)
     return result
   })
 
-  // The engine takes the compacted conversation once the hooks have returned, so its estimate
-  // waits for that. A compaction computed ahead or vetoed leaves the conversation as it was,
+  // The compacted conversation is estimated once the engine has taken it. A compaction computed ahead or vetoed leaves the conversation as it was,
   // and a subagent's leaves the main one. A compacted conversation is a new prefix, which the
   // cache has none of yet
   on('session.compact', async ($, e, next) => {
     const result = await next(e)
     if (e.trigger === 'precompute' || e.agentId !== undefined || result.skip !== undefined) return result
     baseline = null
-    $.clock.after(0, () => void estimateFill($))
+    estimateWhenTaken($)
     await update($, cache, prev => (prev === null ? prev : { ...prev, requestAt: null }))
     return result
   })
@@ -652,15 +744,30 @@ export const register: Register = on => {
       const label = isCompact ? '' : 'Context '
       const percentText = ` ${current.isEstimate ? '~' : ''}${percent}%`
       barLength = label.length + barWidth + percentText.length
+      // The conversation's alone: a subagent's window has no breakdown
+      const rows = viewed === null ? await read($, breakdown) : null
+      const card = rows === null || rows.length === 0 ? null : cardLines(rows)
 
+      // Hovering the bar shows the card over the rows above it, right-aligned to it
       bar = (
-        <Box flexShrink={0}>
+        <Box key="context-card" flexShrink={0}>
           {label !== '' && <Text dimColor>{label}</Text>}
           <Text color={color}>{'█'.repeat(filled)}</Text>
           <Text dimColor>{'░'.repeat(barWidth - filled)}</Text>
           <Text color={color} bold>
             {percentText}
           </Text>
+          {card !== null && (
+            <Box position="absolute" bottom={1} right={0} display="none" hover={{ display: 'flex' }} flexDirection="column" borderStyle="round" borderDimColor>
+              <Text dimColor>{card.title}</Text>
+              {card.lines.map(line => (
+                <Box>
+                  <Text color={line.color}>{line.glyph}</Text>
+                  <Text dimColor={line.isDim}>{line.text}</Text>
+                </Box>
+              ))}
+            </Box>
+          )}
         </Box>
       )
     }
@@ -674,16 +781,26 @@ export const register: Register = on => {
       const percentText = `${cached.hitPercent}%`
       // The cache is per model: one switched to has none of the conversation yet
       const isSameModel = info === null || info.name === cached.model
-      const remaining = isSameModel ? formatRemaining(remainingMs(cached, ttlOf(cached), cacheNow)) : COLD_TEXT
-      cacheLength = label.length + percentText.length + 1 + remaining.length
+      const remaining = isSameModel ? formatRemaining(remainingMs(cached, ttlOf(cached, await ttlsOf($)), cacheNow)) : COLD_TEXT
+      // warm-compact's mark for what it does before the entry lapses, while there is one
+      const upcoming = await read($, warmUpcoming)
+      const coming = remaining === COLD_TEXT ? null : upcoming
+      const mark = coming === null ? null : UPCOMING_STYLES[coming.kind]
+      cacheLength = label.length + percentText.length + 1 + remaining.length + (mark === null ? 0 : 1 + mark.icon.length)
 
       cacheBlock = (
-        <Box flexShrink={0}>
+        <Box key="cache-card" flexShrink={0}>
           {label !== '' && <Text dimColor>{label}</Text>}
           <Text color={hitColor(cached.hitPercent)} bold>
             {percentText}
           </Text>
           {remaining === COLD_TEXT ? <Text color={COLD_COLOR}>{` ${remaining}`}</Text> : <Text dimColor>{` ${remaining}`}</Text>}
+          {mark !== null && <Text color={mark.color}>{` ${mark.icon}`}</Text>}
+          {coming !== null && (
+            <Box position="absolute" bottom={1} right={0} display="none" hover={{ display: 'flex' }} borderStyle="round" borderDimColor>
+              <Text>{` ${upcomingText(coming, cacheNow)} `}</Text>
+            </Box>
+          )}
         </Box>
       )
     }

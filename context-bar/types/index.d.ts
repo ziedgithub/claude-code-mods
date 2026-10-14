@@ -22,6 +22,14 @@ export type AgentView = { id: string; label: string }
 // What a subagent's own requests told: the model and effort its last one named, and the input
 // tokens it was answered over (null until its first response) against `window`
 export type AgentStats = { model: string; effort: string | null; tokens: number | null; window: number }
+// One row of the card over the bar: what fills the window, by category as /context lists it,
+// in tokens and in percent of the window. `color`: the theme key /context draws it in
+export type ContextRow = { name: string; tokens: number; percent: number; color: string; kind: 'used' | 'free' | 'buffer' }
+
+// warm-compact's own, read while it is loaded and never written: the TTLs as it learned them,
+// and what the pause holds if the person stays away. As its contract declares them
+export type LearnedTtl = { cache: CacheTtl; renew: CacheTtl | null }
+export type Upcoming = { kind: 'compact' | 'renew'; at: number; expiresAt: number }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -32,6 +40,12 @@ declare module 'claude-code' {
       cache: CacheInfo | null
       viewing: AgentView | null
       agents: StateFamily<AgentStats | null>
+      // What fills the window as the engine last counted it, null before its first count
+      breakdown: ContextRow[] | null
+    }
+    'warm-compact': {
+      ttl: LearnedTtl | null
+      upcoming: Upcoming | null
     }
   }
 }
