@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { COSTUME_COLORS, COSTUMES, FULL_COSTUMES } from './costumes'
 import type { Costume } from './costumes'
-import { AGENT_COLUMNS, AGENT_ROWS, agentMoodFor, CLAUDE_COLOR, composeScene, drawAgent, drawLone, drawScene, encodeCanvas, flapColorOf, flightPoint, IDLE, minisThatFit, moodFor, paletteFor, PERSONA_ROWS, sceneColumns } from './crab'
+import { AGENT_COLUMNS, AGENT_ROWS, agentMoodFor, beatOf, CLAUDE_COLOR, composeScene, drawAgent, drawLone, drawScene, encodeCanvas, flapColorOf, flightPoint, IDLE, minisThatFit, moodFor, paletteFor, PERSONA_ROWS, sceneColumns } from './crab'
 import type { Mini, Mood, Scene } from './crab'
 
 const decode = (cells: string): number[] => Array.from(new Uint32Array(Uint8Array.fromBase64(cells).buffer))
@@ -352,4 +352,84 @@ test('a small crab alone, where the band lacks the rows for a hat, is drawn as t
   for (let row = 0; row < PERSONA_ROWS; row++) {
     for (let column = 0; column < MINI_STEP - 1; column++) expect(cellAt(words, MINI_STEP - 1, row, column)).toEqual(cellAt(band, SCENE_COLUMNS + MINI_STEP, row, column))
   }
+})
+
+const OPUS_HIGH = { id: 'claude-opus-5-5', effort: 'high' }
+const glyphOf = (words: number[], columns: number, row: number, column: number) => {
+  const [code = 0, color] = cellAt(words, columns, row, column)
+  return [String.fromCharCode(code), color]
+}
+
+test("a small crab's badge, under its feet, shows its model in its family's color and its effort's bar", () => {
+  const badged = (model: Mini['model']) =>
+    composeScene(crewOf([{ color: CLAUDE_COLOR, mood: 'idle', costume: 'builder', model }]), 1).marks.map(mark => [mark.row, mark.column, mark.glyph, mark.color])
+  expect(badged(OPUS_HIGH)).toEqual([[4, 3, '◆', 0xbc8cff], [4, 4, '▆', 0xe3b341]])
+  expect(badged({ id: 'claude-sonnet-4-6', effort: 'low' })).toEqual([[4, 3, '◆', 0x58a6ff], [4, 4, '▂', 0x8b949e]])
+  expect(badged({ id: 'claude-fable-5-1[1m]', effort: 'max' })).toEqual([[4, 3, '◆', 0xf778ba], [4, 4, '█', 0xff7b72]])
+  // A model without effort levels shows its diamond alone; one of no known family, in grey
+  expect(badged({ id: 'claude-haiku-4-5-20251001', effort: null })).toEqual([[4, 3, '◆', 0x7ee787]])
+  expect(badged({ id: 'some-model', effort: 'medium' })).toEqual([[4, 3, '◆', 0x8b949e], [4, 4, '▄', 0x39c5bb]])
+  // Before any small crab's first request, no row for it
+  expect(composeScene(crewOf([bare(0x58a6ff, 'idle')]), 1).pixels.length).toBe(PERSONA_ROWS * 2)
+  // Each small crab its own, under it; the crabs and their glyphs stay as they were, a row up
+  const crew = [bare(0x58a6ff, 'thinking'), { ...bare(0x58a6ff, 'idle'), model: { id: 'claude-haiku-4-5', effort: null } }]
+  const badgedCrew = drawScene(crewOf(crew), 4)
+  const columns = 2 * MINI_STEP + SCENE_COLUMNS
+  expect([badgedCrew.columns, badgedCrew.rows]).toEqual([columns, PERSONA_ROWS + 1])
+  const words = decode(badgedCrew.cells)
+  const plain = decode(drawScene(crewOf(crew.map(({ color, mood, costume }) => ({ color, mood, costume }))), 4).cells)
+  expect(words.slice(0, columns * PERSONA_ROWS * 3)).toEqual(plain)
+  expect(glyphOf(words, columns, 4, 3)).toEqual([' ', DEFAULT_COLOR])
+  expect(glyphOf(words, columns, 4, MINI_STEP + 3)).toEqual(['◆', 0x7ee787])
+  // None where the band has no row to spare
+  expect(drawScene(crewOf(crew), 4, PERSONA_ROWS).rows).toBe(PERSONA_ROWS)
+  expect(drawScene(crewOf(crew), 4, PERSONA_ROWS).cells).toBe(drawScene(crewOf(crew.map(({ color, mood, costume }) => ({ color, mood, costume }))), 4).cells)
+})
+
+test("an agent's crab wears its badge under it alone too, at its own size or the small crab's", () => {
+  const dressed = drawAgent({ color: CLAUDE_COLOR, mood: 'working', costume: 'explorer', model: OPUS_HIGH }, 3)
+  expect([dressed.columns, dressed.rows]).toEqual([AGENT_COLUMNS, AGENT_ROWS + 1])
+  expect(glyphOf(decode(dressed.cells), AGENT_COLUMNS, AGENT_ROWS, 7)).toEqual(['◆', 0xbc8cff])
+  expect(glyphOf(decode(dressed.cells), AGENT_COLUMNS, AGENT_ROWS, 8)).toEqual(['▆', 0xe3b341])
+  const bareOne = drawAgent({ color: CLAUDE_COLOR, mood: 'sleeping', costume: null, model: OPUS_HIGH }, 6)
+  expect([bareOne.columns, bareOne.rows]).toEqual([SCENE_COLUMNS, PERSONA_ROWS + 1])
+  expect(glyphOf(decode(bareOne.cells), SCENE_COLUMNS, PERSONA_ROWS, 7)).toEqual(['◆', 0xbc8cff])
+  const lone = drawLone({ color: CLAUDE_COLOR, mood: 'idle', costume: 'chef', model: OPUS_HIGH }, 1, 5)
+  expect([lone.columns, lone.rows]).toEqual([MINI_STEP - 1, PERSONA_ROWS + 1])
+  expect(glyphOf(decode(lone.cells), MINI_STEP - 1, PERSONA_ROWS, 3)).toEqual(['◆', 0xbc8cff])
+  // Short of the row, as the band allows, without it
+  expect(drawAgent({ color: CLAUDE_COLOR, mood: 'idle', costume: 'explorer', model: OPUS_HIGH }, 1, AGENT_ROWS).rows).toBe(AGENT_ROWS)
+  expect(drawLone({ color: CLAUDE_COLOR, mood: 'idle', costume: 'chef', model: OPUS_HIGH }, 1, PERSONA_ROWS).rows).toBe(PERSONA_ROWS)
+})
+
+test("an agent's effort sets how fast its crab works: a step a second at low, a step a frame at max", () => {
+  const beats = (effort: string | null, model = 'claude-opus-5-5') => Array.from({ length: 7 }, (_, tick) => beatOf({ id: model, effort }, tick))
+  expect(beats('low')).toEqual([0, 0, 0, 0, 1, 1, 1])
+  expect(beats('medium')).toEqual([0, 0, 0, 1, 1, 1, 2])
+  expect(beats('high')).toEqual([0, 0, 1, 1, 2, 2, 3])
+  expect(beats('xhigh')).toEqual([0, 0, 1, 2, 2, 3, 4])
+  expect(beats('max')).toEqual([0, 1, 2, 3, 4, 5, 6])
+  // No level, as on Haiku, or a budget instead of one: full pace, as before its first request
+  expect(beats(null, 'claude-haiku-4-5')).toEqual([0, 1, 2, 3, 4, 5, 6])
+  expect(beats('16000')).toEqual([0, 1, 2, 3, 4, 5, 6])
+  expect(beatOf(undefined, 5)).toBe(5)
+  // Its tool, or its typing, changes as often as its pace says
+  const changes = (mini: Mini, draw: (tick: number) => string) => {
+    let count = 0
+    for (let tick = 1; tick <= 12; tick++) if (draw(tick) !== draw(tick - 1)) count++
+    return count
+  }
+  for (const costume of [...COSTUME_NAMES, null]) {
+    const at = (effort: string) => {
+      const mini: Mini = { color: CLAUDE_COLOR, mood: 'working', costume, model: { id: 'claude-opus-5-5', effort } }
+      const tool = (tick: number) => composeScene(crewOf([mini]), tick).pixels.map(row => row.slice(0, MINI_PIXELS).join()).join('|')
+      return changes(mini, tool)
+    }
+    expect(at('low')).toBeLessThan(at('high'))
+    expect(at('high')).toBeLessThan(at('max'))
+  }
+  // At its own size too, at its laptop or with its tool
+  const big = (costume: Costume | null, effort: string) => changes({ color: CLAUDE_COLOR, mood: 'working', costume }, tick => drawAgent({ color: CLAUDE_COLOR, mood: 'working', costume, model: { id: 'claude-opus-5-5', effort } }, tick).cells)
+  expect(big(null, 'low')).toBeLessThan(big(null, 'max'))
+  expect(big('builder', 'low')).toBeLessThan(big('builder', 'max'))
 })

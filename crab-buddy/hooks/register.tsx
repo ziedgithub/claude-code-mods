@@ -1,7 +1,8 @@
 import type { AgentInfo, EngineInterface, Register, Timer } from 'claude-code'
 
-import { AGENT_ROWS, agentMoodFor, CHEER_FRAMES, CLAUDE_COLOR, COMPACT_BELOW, drawAgent, drawLone, drawScene, flapColorOf, FRAME_MS, IDLE, minisThatFit, moodFor, PERSONA_ROWS } from './crab'
-import type { Activity, AgentActivity, Costume, Flight, Mini, MiniPhase, Scene } from './crab'
+import { AGENT_ROWS, agentMoodFor, CHEER_FRAMES, CLAUDE_COLOR, COMPACT_BELOW, drawAgent, drawLone, drawScene, flapColorOf, FRAME_MS, IDLE, minisThatFit, moodFor } from './crab'
+import type { Activity, AgentActivity, AgentModel, Costume, Flight, Mini, MiniPhase, Scene } from './crab'
+import { tap } from './shared/stream'
 
 const PERSONA_KEY = 'persona'
 const CREW_POLL_MS = 1000
@@ -111,16 +112,6 @@ export const isThinkingChunk = (kind: string, wasThinking: boolean): boolean => 
   return kind === 'engine' ? wasThinking : false
 }
 
-// Passes the response on as it streams, seeing each chunk on the way
-async function* tap<T, R>(stream: AsyncGenerator<T, R>, see: (chunk: T) => Promise<void>): AsyncGenerator<T, R> {
-  for (;;) {
-    const step = await stream.next()
-    if (step.done === true) return step.value
-    await see(step.value)
-    yield step.value
-  }
-}
-
 // The crab above the prompt is repainted in place on each frame of the clock: a blit, not
 // a redraw. Its site is known once the band is drawn, and gone while a dialog takes it
 let frameTick = 0
@@ -136,16 +127,17 @@ let bandRows = Number.POSITIVE_INFINITY
 let viewedAgent: string | undefined
 
 // The subagents' small crabs, in the order they started, dressed for their type's work or
-// bare in its color. `isListed` once `$.agent.list()` showed the agent, whose leaving the
-// list then ends it; a workflow's agents are never listed and end with their `turn.complete`
-// alone
-type CrewMember = AgentActivity & { color: number; costume: Costume | null; isListed: boolean }
+// bare in its color, and badged with the model of their last request. `isListed` once
+// `$.agent.list()` showed the agent, whose leaving the list then ends it; a workflow's agents
+// are never listed and end with their `turn.complete` alone
+type CrewMember = AgentActivity & { color: number; costume: Costume | null; model?: AgentModel; isListed: boolean }
 const crew = new Map<string, CrewMember>()
 let keptColors: Record<string, number> = {}
 
-// How each agent the session ran is dressed, kept once its small crab has left, so its crab
-// is dressed while its transcript is in view after it is done; `leftAt`, the frame it left
-type Dress = { color: number; costume: Costume | null; leftAt: number | null }
+// How each agent the session ran is dressed and badged, kept once its small crab has left, so
+// its crab is dressed while its transcript is in view after it is done; `leftAt`, the frame
+// it left
+type Dress = { color: number; costume: Costume | null; model?: AgentModel; leftAt: number | null }
 const roster = new Map<string, Dress>()
 
 // A new type's color is written at once, over what another session may have kept meanwhile
@@ -187,14 +179,22 @@ const learn = async ($: EngineInterface, agents: readonly AgentInfo[], id: strin
   roster.set(id, { color, costume, leftAt: crew.has(id) ? null : frameTick })
 }
 
+// The model and effort of an agent's request go on its badge, and set its pace
+const badge = (id: string, model: AgentModel): void => {
+  const member = crew.get(id)
+  if (member !== undefined) crew.set(id, { ...member, model })
+  const dress = roster.get(id)
+  if (dress !== undefined) roster.set(id, { ...dress, model })
+}
+
 // The crab of an agent in view: its small crab's mood while it has one, else at rest from
 // when it left, then asleep, as a waiting one; an agent never seen goes bare in orange
 const loneOf = (id: string): Mini => {
   const member = crew.get(id)
-  if (member !== undefined) return { color: member.color, costume: member.costume, mood: agentMoodFor(member, frameTick) }
+  if (member !== undefined) return { color: member.color, costume: member.costume, model: member.model, mood: agentMoodFor(member, frameTick) }
   const dress = roster.get(id)
   const rest: AgentActivity = { phase: 'waiting', isThinking: false, since: dress?.leftAt ?? frameTick }
-  return { color: dress?.color ?? CLAUDE_COLOR, costume: dress?.costume ?? null, mood: agentMoodFor(rest, frameTick) }
+  return { color: dress?.color ?? CLAUDE_COLOR, costume: dress?.costume ?? null, model: dress?.model, mood: agentMoodFor(rest, frameTick) }
 }
 
 // The messages in the air, from the small crab of `agentId`, and when each agent last sent
@@ -268,7 +268,7 @@ export const sceneOf = (mood: Scene['mood'], members: readonly CrewMember[], tic
   const shown = minisThatFit(members.length, columns, isCompact)
   return {
     mood,
-    minis: members.slice(0, shown).map(member => ({ color: member.color, mood: agentMoodFor(member, tick), costume: member.costume })),
+    minis: members.slice(0, shown).map(member => ({ color: member.color, mood: agentMoodFor(member, tick), costume: member.costume, model: member.model })),
     hidden: members.length - shown,
     flights: [],
     isCompact,
@@ -290,11 +290,12 @@ const currentScene = (): Scene => {
 
 // What the band draws: the crab and its crew; or, while an agent's transcript is in view,
 // that agent's crab alone at the crab's own size, its outfit drawn at that size, or its
-// small crab where the band lacks the rows for its hat
+// small crab where the band lacks the rows for its hat. Badges go under them where the band
+// has the row
 const drawBand = (): { columns: number; rows: number; cells: string } => {
-  if (viewedAgent === undefined) return { ...drawScene(currentScene(), frameTick), rows: PERSONA_ROWS }
+  if (viewedAgent === undefined) return drawScene(currentScene(), frameTick, bandRows)
   const mini = loneOf(viewedAgent)
-  return mini.costume !== null && bandRows < AGENT_ROWS ? drawLone(mini, frameTick) : drawAgent(mini, frameTick)
+  return mini.costume !== null && bandRows < AGENT_ROWS ? drawLone(mini, frameTick, bandRows) : drawAgent(mini, frameTick, bandRows)
 }
 
 const animate = async ($: EngineInterface): Promise<void> => {
@@ -359,12 +360,14 @@ export const register: Register = on => {
 
   on('turn.step', async function* ($, e, next) {
     // A subagent's small crab works on each of its steps and thinks while its thinking
-    // streams; one the crew lacks, started before a reload, is looked up in the list
+    // streams; one the crew lacks, started before a reload, is looked up in the list. Each
+    // request names the model and effort its badge shows
     if (e.agentId !== undefined) {
       const id = e.agentId
       const member = crew.get(id)
       if (member === undefined) await syncCrew($)
       else moveTo(id, member, 'running')
+      badge(id, { id: e.model, effort: e.effort === undefined ? null : String(e.effort) })
       return yield* tap(next(e), async chunk => {
         const current = crew.get(id)
         if (current === undefined || current.phase !== 'running') return

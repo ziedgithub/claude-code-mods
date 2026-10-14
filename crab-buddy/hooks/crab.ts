@@ -6,8 +6,10 @@
 // smaller crab of 12 columns stands in for it, its glyphs over its head to spare the
 // columns. Ahead of it stands a small crab for each subagent, dressed for its agent's kind
 // of work, living its agent's moods as the crab lives the main loop's, its glyphs over its
-// head. While an agent's own transcript is in view, its crab stands alone at the crab's own
-// size, its outfit drawn again at that size
+// head. A badge under each small crab's feet tells the model its agent runs on and the
+// effort it asks, and that effort sets how fast the crab works. While an agent's own
+// transcript is in view, its crab stands alone at the crab's own size, its outfit drawn again
+// at that size
 import { COSTUME_COLORS, COSTUMES, FULL_COSTUMES } from './costumes'
 import type { Costume, FullOutfit, Outfit } from './costumes'
 
@@ -17,9 +19,13 @@ export type Activity = { isWorking: boolean; isThinking: boolean; endedAt: numbe
 // A subagent at work, waiting for a message, or done; `since` is when it became so
 export type MiniPhase = 'running' | 'waiting' | 'done'
 export type AgentActivity = { phase: MiniPhase; isThinking: boolean; since: number }
+// The model an agent's last request named, and the effort it asked: null for a model without
+// effort levels
+export type AgentModel = { id: string; effort: string | null }
 // A small crab wears the costume of its agent's kind of work; without one, as a fork or a
-// type no costume fits, it goes bare in its own color and works at a laptop as the crab does
-export type Mini = { color: number; mood: Mood; costume: Costume | null }
+// type no costume fits, it goes bare in its own color and works at a laptop as the crab does.
+// It wears its badge once its agent's first request has gone out
+export type Mini = { color: number; mood: Mood; costume: Costume | null; model?: AgentModel }
 // A message on its way from a small crab to the crab: `from` is the sender's place among
 // the small crabs, one past the drawn ones flying from their count; `progress` runs 0 to 1
 export type Flight = { from: number; color: number; progress: number }
@@ -43,6 +49,11 @@ const MINI_HEAD_ROW = 3
 const MINI_GLYPH_ROW = 0
 const MINI_GLYPH_COLUMN = MINI_BODY_PIXELS / CELL_PIXELS
 const MINI_GAP = 1
+const MINI_STEP = MINI_COLUMNS + MINI_GAP
+// Its badge sits in a row under the band's crabs, the diamond under the middle of its body:
+// added once a small crab has one, where the band has the row to spare
+const BADGE_ROWS = 1
+const MINI_BADGE_COLUMN = 3
 // Each small crab keeps its own time, so they neither blink nor type in step
 const MINI_TICK_SHIFT = 7
 const HAPPY_FRAMES = 20
@@ -72,6 +83,29 @@ const ENVELOPE_TOP = 2
 const FLIGHT_ARC = 2
 // An empty pixel counts as a dark terminal's background when a cell must give up a color
 const BACKDROP = 0x1e1e1e
+// The badge, as the context-bar footer shows the same: a diamond in the color of the model's
+// family, then a bar as tall as the effort, in the effort's color
+const BADGE_GLYPH = '◆'
+const FAMILY = /opus|sonnet|haiku|fable/
+const MODEL_COLORS: Readonly<Record<string, number>> = { opus: 0xbc8cff, sonnet: 0x58a6ff, haiku: 0x7ee787, fable: 0xf778ba }
+const OTHER_MODEL_COLOR = 0x8b949e
+const EFFORT_BARS: Readonly<Record<string, { glyph: string; color: number }>> = {
+  low: { glyph: '▂', color: 0x8b949e },
+  medium: { glyph: '▄', color: 0x39c5bb },
+  high: { glyph: '▆', color: 0xe3b341 },
+  xhigh: { glyph: '▇', color: 0xffa657 },
+  max: { glyph: '█', color: 0xff7b72 },
+}
+// How fast an agent's crab works, by its effort: so many steps of its tool, or of its typing,
+// in so many frames, from one a second at `low` to one a frame at `max`. Without a level, as
+// on a model without effort, it works at full pace
+const PACES: Readonly<Record<string, readonly [number, number]>> = {
+  low: [1, 4],
+  medium: [1, 3],
+  high: [1, 2],
+  xhigh: [2, 3],
+  max: [1, 1],
+}
 
 type Palette = Readonly<Record<string, number>>
 
@@ -336,13 +370,34 @@ const gazeAt = (tick: number): Gaze => {
   return glance >= 44 && glance < 44 + GLANCE_FRAMES ? 'right' : 'ahead'
 }
 
+// A pose at `tick`; at work, at its `beat`, the step its pace has reached (the crab's own is
+// the frame's)
+type PoseAt = (tick: number, beat?: number) => Pose
+
+// The step of its work an agent's crab has reached by `tick`, at the pace of its effort
+export const beatOf = (model: AgentModel | undefined, tick: number): number => {
+  const pace = model === undefined || model.effort === null ? undefined : PACES[model.effort]
+  const [steps, frames] = pace ?? [1, 1]
+  return Math.floor((tick * steps) / frames)
+}
+
+// The badge of an agent's model, from `column` of `row`: the diamond, then the effort's bar
+// for a model with effort levels; none before its first request
+export const badgeOf = (model: AgentModel | undefined, row: number, column: number): Mark[] => {
+  if (model === undefined) return []
+  const family = FAMILY.exec(model.id.toLowerCase())?.[0]
+  const color = (family === undefined ? undefined : MODEL_COLORS[family]) ?? OTHER_MODEL_COLOR
+  const bar = model.effort === null ? undefined : EFFORT_BARS[model.effort]
+  return [{ row, column, glyph: BADGE_GLYPH, color }, ...(bar === undefined ? [] : [{ row, column: column + 1, ...bar }])]
+}
+
 // The crab's poses in one of its sizes
-const posesOf = (art: CrabArt): Record<Mood, (tick: number) => Pose> => {
+const posesOf = (art: CrabArt): Record<Mood, PoseAt> => {
   const rising = (glyphs: string, color: number): Mark[] => art.rise.map((cell, i) => ({ ...cell, glyph: glyphs.charAt(i), color }))
   return {
     idle: tick => ({ sprite: [...art.head, ...art.eyes[gazeAt(tick)], ...art.standing], marks: [] }),
     // Typing, one claw up and one down in turn, the logo pulsing between two glows
-    working: tick => ({ sprite: art.working(tick % 2 === 0, Math.floor(tick / GLOW_FRAMES) % 2 === 0 ? 'G' : 'N'), marks: [] }),
+    working: (tick, beat = tick) => ({ sprite: art.working(beat % 2 === 0, Math.floor(tick / GLOW_FRAMES) % 2 === 0 ? 'G' : 'N'), marks: [] }),
     // A bubble beside its raised claw grows one dot at a time, holds whole, then starts over
     thinking: tick => {
       const phase = Math.floor(tick / BUBBLE_FRAMES) % 4
@@ -373,9 +428,9 @@ const glyphOver = (glyph: string, color: number, column = MINI_GLYPH_COLUMN): Ma
 
 const standing = (gaze: Gaze): readonly string[] => [MINI_TOP, ...MINI_GAZE[gaze], MINI_UNDERSIDE, MINI_LEGS]
 
-const MINI_POSES: Record<Mood, (tick: number) => Pose> = {
+const MINI_POSES: Record<Mood, PoseAt> = {
   idle: tick => ({ sprite: standing(gazeAt(tick)), marks: [] }),
-  working: tick => ({ sprite: miniTyping(tick % 2 === 0, Math.floor(tick / GLOW_FRAMES) % 2 === 0 ? 'G' : 'N'), marks: [] }),
+  working: (tick, beat = tick) => ({ sprite: miniTyping(beat % 2 === 0, Math.floor(tick / GLOW_FRAMES) % 2 === 0 ? 'G' : 'N'), marks: [] }),
   thinking: tick => ({ sprite: MINI_PONDERING, marks: glyphOver('.oOO'.charAt(Math.floor(tick / BUBBLE_FRAMES) % 4), BUBBLE_COLOR) }),
   // Claws up and down in turn, too small to leave the ground
   happy: tick => {
@@ -390,8 +445,8 @@ const MINI_POSES: Record<Mood, (tick: number) => Pose> = {
 
 // Dressed, it stands while idle, uses its tool while its agent works, its eyes on it, and in
 // its other moods holds it as it thinks, cheers or sleeps
-const dressedPose = (outfit: Outfit, mood: Mood, tick: number): { sprite: readonly string[]; tool: readonly string[] } => {
-  if (mood === 'working') return { sprite: standing('right'), tool: outfit.work[tick % outfit.work.length] ?? outfit.tool }
+const dressedPose = (outfit: Outfit, mood: Mood, tick: number, beat: number): { sprite: readonly string[]; tool: readonly string[] } => {
+  if (mood === 'working') return { sprite: standing('right'), tool: outfit.work[beat % outfit.work.length] ?? outfit.tool }
   return { sprite: MINI_POSES[mood](tick).sprite, tool: outfit.tool }
 }
 
@@ -400,7 +455,7 @@ const countText = (hidden: number): string => (hidden > 0 ? `+${hidden}` : '')
 // The small crabs and their count take the left, a gap, then the crab and its glyphs
 export const sceneColumns = (minis: number, hidden: number, isCompact: boolean): number => {
   const count = countText(hidden)
-  const crew = minis * (MINI_COLUMNS + MINI_GAP) + (count === '' ? 0 : count.length + MINI_GAP)
+  const crew = minis * MINI_STEP + (count === '' ? 0 : count.length + MINI_GAP)
   const art = isCompact ? COMPACT : FULL
   return crew + art.columns + art.markColumns
 }
@@ -424,6 +479,8 @@ const blankCanvas = (columns: number, rows: number): Canvas => ({
   marks: [],
 })
 
+const rowsOf = (canvas: Canvas): number => canvas.pixels.length / CELL_PIXELS
+
 const stamp = (canvas: Canvas, sprite: readonly string[], palette: Palette, left: number, top: number): void => {
   sprite.forEach((line, y) => {
     for (let x = 0; x < line.length; x++) {
@@ -435,30 +492,37 @@ const stamp = (canvas: Canvas, sprite: readonly string[], palette: Palette, left
 }
 
 // A bare small crab in its own color; a dressed one in its wear, its hat over the top of its
-// head, its tool at its right
+// head, its tool at its right. Its badge under it, where the canvas has the row
 const drawMini = (canvas: Canvas, mini: Mini, tick: number, column: number): void => {
   const left = column * CELL_PIXELS
-  const pose = MINI_POSES[mini.mood](tick)
+  const beat = beatOf(mini.model, tick)
+  const pose = MINI_POSES[mini.mood](tick, beat)
   for (const mark of pose.marks) canvas.marks.push({ ...mark, column: column + mark.column })
+  if (rowsOf(canvas) > PERSONA_ROWS) canvas.marks.push(...badgeOf(mini.model, PERSONA_ROWS, column + MINI_BADGE_COLUMN))
   if (mini.costume === null) {
     stamp(canvas, pose.sprite, paletteFor(mini.color), left, MINI_HEAD_ROW)
     return
   }
   const outfit = COSTUMES[mini.costume]
   const palette = { ...paletteFor(mini.color), ...COSTUME_COLORS }
-  const { sprite, tool } = dressedPose(outfit, mini.mood, tick)
+  const { sprite, tool } = dressedPose(outfit, mini.mood, tick, beat)
   stamp(canvas, sprite, palette, left, MINI_HEAD_ROW)
   stamp(canvas, outfit.wear, palette, left, MINI_HEAD_ROW + 1)
   stamp(canvas, outfit.hat, palette, left, MINI_HEAD_ROW + 1 - outfit.hat.length)
   stamp(canvas, tool, palette, left + MINI_BODY_PIXELS, 0)
 }
 
-export const composeScene = (scene: Scene, tick: number): Canvas => {
-  const canvas = blankCanvas(sceneColumns(scene.minis.length, scene.hidden, scene.isCompact), PERSONA_ROWS)
+// The band's rows: a row for badges under the crabs once a small crab has one and the band
+// has `maxRows` to spare for it
+const badgedRows = (rows: number, minis: readonly Mini[], maxRows: number): number =>
+  minis.some(mini => mini.model !== undefined) && maxRows >= rows + BADGE_ROWS ? rows + BADGE_ROWS : rows
+
+export const composeScene = (scene: Scene, tick: number, maxRows = Number.POSITIVE_INFINITY): Canvas => {
+  const canvas = blankCanvas(sceneColumns(scene.minis.length, scene.hidden, scene.isCompact), badgedRows(PERSONA_ROWS, scene.minis, maxRows))
   let left = 0
   scene.minis.forEach((mini, place) => {
     drawMini(canvas, mini, tick + place * MINI_TICK_SHIFT, left)
-    left += MINI_COLUMNS + MINI_GAP
+    left += MINI_STEP
   })
   const count = countText(scene.hidden)
   for (let i = 0; i < count.length; i++) canvas.marks.push({ row: PERSONA_ROWS - 1, column: left + i, glyph: count.charAt(i), color: COUNT_COLOR })
@@ -469,7 +533,7 @@ export const composeScene = (scene: Scene, tick: number): Canvas => {
   for (const mark of pose.marks) canvas.marks.push({ ...mark, column: left + mark.column })
   for (const flight of scene.flights) {
     const start = flight.from < scene.minis.length
-      ? flight.from * (MINI_COLUMNS + MINI_GAP) * CELL_PIXELS + (MINI_BODY_PIXELS - ENVELOPE_PIXELS) / 2
+      ? flight.from * MINI_STEP * CELL_PIXELS + (MINI_BODY_PIXELS - ENVELOPE_PIXELS) / 2
       : countLeft * CELL_PIXELS
     const { column, row } = flightPoint(start, left * CELL_PIXELS, flight.progress)
     stamp(canvas, ENVELOPE, { P: PAPER_COLOR, F: flight.color }, column, row)
@@ -552,16 +616,18 @@ export const encodeCanvas = (canvas: Canvas): string => {
   return new Uint8Array(Uint32Array.from(words).buffer).toBase64()
 }
 
-export const drawScene = (scene: Scene, tick: number): { columns: number; cells: string } => {
-  const canvas = composeScene(scene, tick)
-  return { columns: canvas.columns, cells: encodeCanvas(canvas) }
+export const drawScene = (scene: Scene, tick: number, maxRows = Number.POSITIVE_INFINITY): { columns: number; rows: number; cells: string } => {
+  const canvas = composeScene(scene, tick, maxRows)
+  return { columns: canvas.columns, rows: rowsOf(canvas), cells: encodeCanvas(canvas) }
 }
 
 // A dressed agent's crab at the crab's own size: its hat's four rows over its head, the
 // crab under them, its tool in the ten pixel columns right of its claw, its glyphs over its
-// right shoulder, between its hat and its tool
+// right shoulder, between its hat and its tool, and its badge under it, the diamond under the
+// middle of its body
 const AGENT_HAT_PIXELS = 4
 const AGENT_TOOL_PIXELS = 10
+const AGENT_BADGE_COLUMN = 7
 export const AGENT_COLUMNS = FULL.columns + AGENT_TOOL_PIXELS / CELL_PIXELS
 export const AGENT_ROWS = PERSONA_ROWS + AGENT_HAT_PIXELS / CELL_PIXELS
 const AGENT_ART: CrabArt = {
@@ -578,38 +644,41 @@ const AGENT_POSES = posesOf(AGENT_ART)
 
 // Dressed, it stands while idle, uses its tool while its agent works, its eyes on it, and in
 // its other moods holds it as it thinks, cheers or sleeps; asleep, its head sits a row lower
-const agentPose = (outfit: FullOutfit, mood: Mood, tick: number): { sprite: readonly string[]; tool: readonly string[]; marks: readonly Mark[]; drop: number } => {
-  if (mood === 'working') return { sprite: [...FULL_HEAD, ...FULL.eyes.right, ...FULL_STANDING], tool: outfit.work[tick % outfit.work.length] ?? outfit.tool, marks: [], drop: 0 }
+const agentPose = (outfit: FullOutfit, mood: Mood, tick: number, beat: number): { sprite: readonly string[]; tool: readonly string[]; marks: readonly Mark[]; drop: number } => {
+  if (mood === 'working') return { sprite: [...FULL_HEAD, ...FULL.eyes.right, ...FULL_STANDING], tool: outfit.work[beat % outfit.work.length] ?? outfit.tool, marks: [], drop: 0 }
   const pose = AGENT_POSES[mood](tick)
   return { sprite: pose.sprite, tool: outfit.tool, marks: pose.marks, drop: mood === 'sleeping' ? 1 : 0 }
 }
 
 // A small crab alone at its own size, where the band lacks the rows for its hat
-export const drawLone = (mini: Mini, tick: number): { columns: number; rows: number; cells: string } => {
-  const canvas = blankCanvas(MINI_COLUMNS, PERSONA_ROWS)
+export const drawLone = (mini: Mini, tick: number, maxRows = Number.POSITIVE_INFINITY): { columns: number; rows: number; cells: string } => {
+  const canvas = blankCanvas(MINI_COLUMNS, badgedRows(PERSONA_ROWS, [mini], maxRows))
   drawMini(canvas, mini, tick, 0)
-  return { columns: canvas.columns, rows: PERSONA_ROWS, cells: encodeCanvas(canvas) }
+  return { columns: canvas.columns, rows: rowsOf(canvas), cells: encodeCanvas(canvas) }
 }
 
 // An agent's crab drawn alone at the crab's own size, as the band draws it while the agent's
 // transcript is in view. Bare, it is the crab in its agent's color, at work on its laptop;
-// dressed, it wears its outfit drawn at that size
-export const drawAgent = (mini: Mini, tick: number): { columns: number; rows: number; cells: string } => {
+// dressed, it wears its outfit drawn at that size. Either works at its effort's pace
+export const drawAgent = (mini: Mini, tick: number, maxRows = Number.POSITIVE_INFINITY): { columns: number; rows: number; cells: string } => {
   const palette = { ...paletteFor(mini.color), ...COSTUME_COLORS }
+  const beat = beatOf(mini.model, tick)
   if (mini.costume === null) {
-    const canvas = blankCanvas(FULL.columns + FULL.markColumns, PERSONA_ROWS)
-    const pose = FULL_POSES[mini.mood](tick)
+    const canvas = blankCanvas(FULL.columns + FULL.markColumns, badgedRows(PERSONA_ROWS, [mini], maxRows))
+    const pose = FULL_POSES[mini.mood](tick, beat)
     stamp(canvas, pose.sprite, palette, 0, 0)
     canvas.marks.push(...pose.marks)
-    return { columns: canvas.columns, rows: PERSONA_ROWS, cells: encodeCanvas(canvas) }
+    if (rowsOf(canvas) > PERSONA_ROWS) canvas.marks.push(...badgeOf(mini.model, PERSONA_ROWS, AGENT_BADGE_COLUMN))
+    return { columns: canvas.columns, rows: rowsOf(canvas), cells: encodeCanvas(canvas) }
   }
   const outfit = FULL_COSTUMES[mini.costume]
-  const canvas = blankCanvas(AGENT_COLUMNS, AGENT_ROWS)
-  const { sprite, tool, marks, drop } = agentPose(outfit, mini.mood, tick)
+  const canvas = blankCanvas(AGENT_COLUMNS, badgedRows(AGENT_ROWS, [mini], maxRows))
+  const { sprite, tool, marks, drop } = agentPose(outfit, mini.mood, tick, beat)
   stamp(canvas, sprite, palette, 0, AGENT_HAT_PIXELS)
   stamp(canvas, outfit.wear, palette, 0, AGENT_HAT_PIXELS + drop)
   stamp(canvas, outfit.hat, palette, 0, drop)
   stamp(canvas, tool, palette, FULL.columns * CELL_PIXELS, 0)
   canvas.marks.push(...marks)
-  return { columns: canvas.columns, rows: AGENT_ROWS, cells: encodeCanvas(canvas) }
+  if (rowsOf(canvas) > AGENT_ROWS) canvas.marks.push(...badgeOf(mini.model, AGENT_ROWS, AGENT_BADGE_COLUMN))
+  return { columns: canvas.columns, rows: rowsOf(canvas), cells: encodeCanvas(canvas) }
 }

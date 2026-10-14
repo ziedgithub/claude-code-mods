@@ -1,6 +1,6 @@
 {
   "name": "crab-buddy",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A pixel-art Claude crab above the prompt that works, thinks, cheers and sleeps with the session, with a small crab for each subagent, dressed for its kind of work",
   "author": { "name": "Zied BEN AMAR", "url": "https://github.com/ziedgithub" },
   "homepage": "https://github.com/ziedgithub/claude-code-mods/tree/main/crab-buddy",

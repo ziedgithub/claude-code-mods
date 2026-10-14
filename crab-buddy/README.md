@@ -1,6 +1,6 @@
 # crab-buddy
 
-A pixel-art Claude crab lives in the band above the prompt and goes through your session with you. Each subagent gets a small crab of its own, dressed for its kind of work.
+A pixel-art Claude crab lives in the band above the prompt and goes through your session with you. Each subagent gets a small crab of its own, dressed for its kind of work, with a badge for the model and effort it runs on.
 
 ![crab-buddy in action](../docs/crab-buddy.gif)
 
@@ -50,9 +50,22 @@ The built-in agent types always wear the costume shown above. Any other type, su
 
 A type whose name says nothing about its work goes bare, in a color of its own from a spare palette. That color is remembered across sessions, so the type keeps it. A fork, a copy of the conversation, goes bare in the crab's own orange and types on a laptop like the big crab.
 
+### Model and effort
+
+Under each small crab's feet, a badge shows what its agent runs on, with the same signs and colors as the [context-bar](../context-bar/) footer:
+
+- `◆` takes the color of the model's family: purple for Opus, blue for Sonnet, green for Haiku, pink for Fable, grey for any other.
+- The bar after it is as tall as the effort, in its color: `▂` low (grey), `▄` medium (teal), `▆` high (yellow), `▇` xhigh (orange), `█` max (red). A model without effort levels, such as Haiku, shows its `◆` alone.
+
+The badge appears with the agent's first request and follows each one after, so it changes if the agent switches model. It stays while the crab thinks, cheers or sleeps.
+
+The badges take one row of the band under the crabs, added with the first badge and gone with the last small crab. A band too short to spare the row draws none.
+
+The effort also sets how fast the crab works. At `low` it uses its tool, or types, once a second; at `medium`, every three quarters of a second; at `high`, twice a second; at `xhigh`, a little faster; at `max`, four times a second. A model without effort levels works at full pace.
+
 ### In a subagent's transcript
 
-When you open a subagent's transcript, from the list under the prompt or from `/tasks`, the band shows only that agent's crab, at the main crab's size and detail. Its costume is drawn again at that size: its hat sits on its head, and its tool is at its side. It keeps working, thinking and sleeping with its agent, and it stays dressed after the agent is done. A fork, or a type no costume fits, is the main crab itself in its own color, typing on its laptop.
+When you open a subagent's transcript, from the list under the prompt or from `/tasks`, the band shows only that agent's crab, at the main crab's size and detail. Its costume is drawn again at that size: its hat sits on its head, and its tool is at its side. It keeps working, thinking and sleeping with its agent, and it stays dressed and badged after the agent is done, its badge under it. A fork, or a type no costume fits, is the main crab itself in its own color, typing on its laptop.
 
 The hat takes two rows over the crab. If the band doesn't have them to spare, the agent's small crab is drawn instead. Back in the main conversation, the band shows the main crab and its crew again.
 

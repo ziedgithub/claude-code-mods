@@ -73,7 +73,7 @@ test('sceneOf shows up to eight small crabs and counts the rest, fewer beside a 
   expect(wide.isCompact).toBe(false)
   expect(wide.minis.length).toBe(8)
   expect(wide.hidden).toBe(2)
-  expect(wide.minis[0]).toEqual({ color: CLAUDE_COLOR, mood: 'working', costume: 'builder' })
+  expect(wide.minis[0]).toEqual({ color: CLAUDE_COLOR, mood: 'working', costume: 'builder', model: undefined })
   const phone = sceneOf('idle', members, 0, 48)
   expect(phone.isCompact).toBe(true)
   expect(phone.minis.length).toBe(3)
@@ -339,4 +339,51 @@ test("a fork's crab in its transcript is the crab itself, at its laptop", async 
   const found = await band.find({ type: 'Raster' })
   expect([found?.props.columns, found?.props.rows]).toEqual([19, 4])
   expect(framesOf('working').has(found?.props.cells as string)).toBe(true)
+})
+
+test("a subagent's small crab wears the badge of the model and effort its requests name under it, kept in its transcript", async ($, on) => {
+  const world = engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const band = await $.ui.mount({ plugin: 'crab-buddy', surface: 'terminal', component: 'AbovePrompt', props: BAND, requestId: 'band' })
+  await $.agent.spawn({ ...SPAWN, subagentType: 'Explore' } as never)
+  world.agents = [EXPLORER]
+  await world.clock.advance(500)
+  // Drawn again, so the engine validates its glyphs
+  const raster = async () => {
+    await band.redraw(BAND)
+    const found = await band.find({ type: 'Raster' })
+    return { columns: found?.props.columns as number, rows: found?.props.rows as number, words: decode(found?.props.cells as string) }
+  }
+  const glyphAt = async (row: number, column: number) => {
+    const { columns, words } = await raster()
+    const [code = 0, color] = words.slice((row * columns + column) * 3)
+    return [String.fromCharCode(code), color]
+  }
+  const step = async (model: string, effort?: 'high') => {
+    const reading = readAll($.turn.step({ turnId: 's1', index: 0, model, ...(effort === undefined ? {} : { effort }), messageCount: 1, agentId: 'a1' }))
+    await world.clock.advance(2100)
+    await reading
+  }
+  // No row for it before its first request; then one under the crabs
+  expect((await raster()).rows).toBe(4)
+  await step('claude-opus-5-5', 'high')
+  expect((await raster()).rows).toBe(5)
+  expect(await glyphAt(4, 3)).toEqual(['◆', 0xbc8cff])
+  expect(await glyphAt(4, 4)).toEqual(['▆', 0xe3b341])
+  // The next request's model, on Haiku without effort
+  await step('claude-haiku-4-5')
+  expect(await glyphAt(4, 3)).toEqual(['◆', 0x7ee787])
+  expect(await glyphAt(4, 4)).toEqual([' ', DEFAULT])
+  // A band without the row to spare draws none
+  await band.redraw({ ...(BAND as object), maxRows: 4 } as never)
+  expect((await band.find({ type: 'Raster' }))?.props.rows).toBe(4)
+  // Done and gone from the band, its crab in its transcript still wears it
+  await $.turn.complete({ reason: 'answer', answer: 'ok', durationMs: 1, isAborted: false, turnId: 's1', agentId: 'a1' } as never)
+  world.agents = []
+  await world.clock.advance(6000)
+  const view = await $.ui.mount({ plugin: 'crab-buddy', surface: 'terminal', component: 'AbovePrompt', props: viewing('a1'), requestId: 'view' })
+  const found = await view.find({ type: 'Raster' })
+  expect([found?.props.columns, found?.props.rows]).toEqual([21, 7])
+  const [code = 0, color] = decode(found?.props.cells as string).slice((6 * 21 + 7) * 3)
+  expect([String.fromCharCode(code), color]).toEqual(['◆', 0x7ee787])
 })
