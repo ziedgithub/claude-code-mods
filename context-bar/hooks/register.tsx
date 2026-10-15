@@ -297,7 +297,29 @@ const estimateOnceTaken = async ($: EngineInterface, waitedMs = 0): Promise<void
 
 const estimateWhenTaken = ($: EngineInterface): void => {
   isAwaitingTake = true
+  isDropTold = true
   $.clock.after(0, () => void estimateOnceTaken($))
+}
+
+// Where an organization manages Claude Code, `session.compact` passes over the plugins a person
+// installs, and nothing tells the footer of a compaction. The engine still drops its measure
+// once it has taken the compacted conversation: the clock sees the measure go, and the bar
+// takes it as a compaction. A drop a hook already told of is left to that hook
+let wasMeasured = false
+let isDropTold = false
+
+const followMeasure = async ($: EngineInterface): Promise<void> => {
+  const { context } = await $.session.usage()
+  const isDropped = wasMeasured && context.percent === undefined
+  wasMeasured = context.percent !== undefined
+  if (!isDropped) return
+  if (isDropTold) {
+    isDropTold = false
+    return
+  }
+  baseline = null
+  await update($, cache, prev => (prev === null || prev.requestAt === null ? prev : { ...prev, requestAt: null }))
+  await estimateFill($)
 }
 
 // The last measure, and what the conversation grew by since its request, as counted locally
@@ -516,6 +538,32 @@ export const upcomingText = (coming: Upcoming, now: number): string => {
     : `${icon} Keep warm renews the cache ${when}`
 }
 
+export type DesktopSegment = { text: string; color?: string }
+
+// The desktop's line: the agent in view, how full its window is and the cache, each short
+export const desktopSegments = (parts: {
+  agent: string | null
+  fill: ContextFill | null
+  cached: CacheInfo | null
+  remaining: string | null
+  upcoming: Upcoming | null
+}): DesktopSegment[] => {
+  const segments: DesktopSegment[] = []
+  if (parts.agent !== null) segments.push({ text: `${AGENT_ICON} ${parts.agent}` })
+  if (parts.fill !== null) {
+    const percent = Math.min(100, Math.max(0, parts.fill.percent))
+    segments.push({ text: `Context ${parts.fill.isEstimate ? '~' : ''}${percent}%`, color: colorFor(percent) })
+  }
+  if (parts.cached !== null && parts.remaining !== null) {
+    const mark = parts.upcoming === null ? '' : ` ${UPCOMING_STYLES[parts.upcoming.kind].icon}`
+    segments.push({
+      text: `Cache ${parts.cached.hitPercent}% ${parts.remaining}${mark}`,
+      color: parts.remaining === COLD_TEXT ? COLD_COLOR : hitColor(parts.cached.hitPercent),
+    })
+  }
+  return segments
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const { context } = await $.session.usage()
@@ -529,7 +577,9 @@ export const register: Register = on => {
     )
     // `/model`, its picker and alt+p switch the model without any event or request
     $.clock.every(MODEL_POLL_MS, () => void refreshModel($))
-    $.clock.every(FILL_POLL_MS, () => void estimateMissingFill($))
+    wasMeasured = context.percent !== undefined
+    isDropTold = false
+    $.clock.every(FILL_POLL_MS, () => void estimateMissingFill($).then(() => followMeasure($)))
     const stored = await $.store.get(CACHE_TTL_KEY)
     if (isCacheTtl(stored)) cacheTtl = stored
     const storedRenewTtl = await $.store.get(RENEW_TTL_KEY)
@@ -677,6 +727,25 @@ export const register: Register = on => {
     // what other mods beneath draw there goes with them, at the right end
     const modesText = e.props.modes.join(' & ')
     const beneath = await next(e)
+
+    // The desktop draws the model, the effort and the window's fill of its own, and lays this
+    // slot out as one short line, its buttons first: it gets one line of what it lacks
+    if (e.surface !== 'terminal') {
+      const cached = viewed === null ? await read($, cache) : null
+      const isSameModel = cached === null || info === null || info.name === cached.model
+      const remaining =
+        cached === null ? null : isSameModel ? formatRemaining(remainingMs(cached, ttlOf(cached, await ttlsOf($)), cacheNow)) : COLD_TEXT
+      const coming = remaining === null || remaining === COLD_TEXT ? null : await read($, warmUpcoming)
+      const segments = desktopSegments({ agent: viewed?.label ?? null, fill: current, cached, remaining, upcoming: coming })
+      return (
+        <Box flexShrink={0} gap={1}>
+          {segments.map((segment, i) => (
+            <Text color={segment.color} dimColor={segment.color === undefined}>{`${i === 0 ? '' : '· '}${segment.text}`}</Text>
+          ))}
+          {beneath}
+        </Box>
+      )
+    }
 
     const parts = info === null ? null : modelParts(info)
     const pending = viewed === null ? await read($, asking) : null

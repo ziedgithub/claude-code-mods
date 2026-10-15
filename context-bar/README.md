@@ -13,9 +13,12 @@ A footer for Claude Code. In the slot right of the hint line under the prompt, i
   - Hover the bar to see what fills the window, over the three rows of the prompt above it: the same categories `/context` lists (system prompt, tools, memory files, messages, free space, the compaction buffer), each in tokens and as a share of the window, in columns three rows tall so the band above the prompt never covers them. The figures are Claude Code's own estimates, refreshed with every request.
   - When a step adds a lot, such as a large file read, the bar rises as soon as the next request goes out, marked with `~`, and the response then replaces it with the measured figure. That early figure is the last measured one plus what Claude Code's local count says was added since. It only shows when it raises the percentage, so small steps don't make the `~` blink.
   - After a compaction or a `/clear`, and in a fresh session, Claude Code has no measured figure until the next response. Meanwhile the bar shows Claude Code's own local estimate (the one `/context` makes), marked with `~`.
+  - Where an organization manages Claude Code, plugins are not told of a compaction. The bar notices it anyway, within a second, from Claude Code dropping its measured figure.
 - **Compact `⇊` and clear `⌫`**: one click asks first (`clear context? yes no`). The question goes away by itself after five seconds, so a stray click does nothing.
 - **Subagents**: open a subagent's transcript from the tasks list and the footer switches to that agent: `↳ Explore  ◆ Haiku 4.5  Context ██░░░░ 15%`. It shows the model and effort the agent's last request used, and how full its own context window is. These are for reading only: the model and effort can't be clicked, and the cache, compact and clear are hidden, since they belong to the main conversation. Go back to the main conversation and the footer goes back too.
   - The agent's context fills in after its first response. When the agent runs on the session's model, the bar uses the session's window size. On any other model it assumes 200K, or 1M for a `[1m]` model.
+
+In Claude Code Desktop, which shows the model, the effort and the context of its own and draws this slot as one short line, the footer is a single line of what the app lacks: `Context 10% · Cache 99% ~58m`.
 
 On a narrow terminal the labels shorten, and when one row can't hold everything the blocks stack.
 

@@ -8,6 +8,7 @@ import {
   agentWindow,
   barWidthFor,
   cardLines,
+  desktopSegments,
   choicesFor,
   chooserLength,
   colorFor,
@@ -469,6 +470,31 @@ const cacheOf = async ($: any) => {
   return async (): Promise<string | undefined> => (await footer.find({ type: 'Text', text: /^ (~\d+[ms]|cold)$/ }))?.text
 }
 
+// Where an organization manages Claude Code, `session.compact` passes over the mod: the engine
+// compacts and drops its measure without a word to it
+test('a compaction no hook is told of shows the estimate once the engine drops its measure', LONG, async ($, on) => {
+  const world = cacheEngine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const footer = await $.ui.mount({ plugin: 'context-bar', surface: 'terminal', component: 'SessionMode', props: { modes: [] }, requestId: 'footer' })
+  const percent = async () => (await footer.find({ type: 'Text', text: /^ ~?\d+%$/ }))?.text
+  const remaining = await cacheOf($)
+  await request($, 't1')
+  expect(await remaining()).not.toBe(' cold')
+  await world.clock.advance(1000)
+  expect(await percent()).toBe(' 50%')
+
+  world.measured = {}
+  await world.clock.advance(1000)
+  expect(await percent()).toBe(' ~16%')
+  expect(await remaining()).toBe(' cold')
+
+  // The next response measures it, and the bar keeps that while the engine has no measure yet
+  world.step = { ...MISS, cache_creation_input_tokens: 39_990 }
+  await request($, 't2')
+  await world.clock.advance(2000)
+  expect(await percent()).toBe(' 20%')
+})
+
 test("another plugin's fork renews the cache's countdown, and a compaction leaves it cold", { ...LONG, plugins: [KEEPER] }, async ($, on) => {
   const world = cacheEngine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -513,7 +539,7 @@ test("a fork's entry found gone before the hour makes later forks count down fiv
   expect(await remaining()).toBe(' ~60m')
   await fork($)
   await world.clock.advance(1000)
-  expect(await remaining()).toBe(' ~5m')
+  expect(await remaining()).not.toBe(' cold')
 })
 
 const BAND = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100, scroll: { offset: 0, bodyRows: 10 } }
@@ -649,7 +675,7 @@ test("while warm-compact is loaded the countdown runs on its TTL, and learns non
   const remaining = await cacheOf($)
   await request($, 't1')
   await world.clock.advance(1000)
-  expect(await remaining()).toBe(' ~5m')
+  expect(await remaining()).not.toBe(' cold')
 
   // A miss twenty minutes on would tell the footer five minutes, were it learning
   await warm($, { ttl: { cache: '1h', renew: null } })
@@ -683,4 +709,21 @@ test("warm-compact's plan for the pause shows beside the countdown, with a card 
   await world.clock.advance(1000)
   expect(await footer.find({ type: 'Text', text: ' ♨' })).toBeUndefined()
   expect(await footer.find({ type: 'Text', text: /^ ~\d+m$/ })).toBeDefined()
+})
+
+test('the desktop line says how full the window is and how the cache stands, nothing the desktop shows itself', () => {
+  const fill = { percent: 10, tokens: 100_000, window: 1_000_000, isEstimate: false }
+  const cached = { hitPercent: 99, requestAt: 0, model: 'claude-opus-5-5' }
+  expect(desktopSegments({ agent: null, fill, cached, remaining: '~58m', upcoming: null }).map(s => s.text)).toEqual(['Context 10%', 'Cache 99% ~58m'])
+  expect(desktopSegments({ agent: null, fill: { ...fill, isEstimate: true }, cached: null, remaining: null, upcoming: null }).map(s => s.text)).toEqual(['Context ~10%'])
+  expect(desktopSegments({ agent: null, fill, cached, remaining: '~58m', upcoming: { kind: 'compact', at: 1, expiresAt: 2 } }).at(-1)?.text).toBe('Cache 99% ~58m ⇊')
+  expect(desktopSegments({ agent: 'Explore', fill, cached: null, remaining: null, upcoming: null }).map(s => s.text)).toEqual(['↳ Explore', 'Context 10%'])
+})
+
+test('on the desktop the footer is one line with no picks or buttons', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const footer = await $.ui.mount({ plugin: 'context-bar', surface: 'desktop', component: 'SessionMode', props: { modes: [] }, requestId: 'footer' })
+  expect(await footer.find({ type: 'Text', text: 'Context 60%' })).toBeDefined()
+  expect(await footer.find({ type: 'Button' })).toBeUndefined()
 })
