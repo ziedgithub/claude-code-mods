@@ -80,8 +80,9 @@ const AGENT_LABEL_MAX = 20
 // The window of a model other than the session's, which the engine reports for its own alone
 const DEFAULT_WINDOW = 200_000
 const LONG_WINDOW = 1_000_000
-// The card over the bar, one row per category of what fills the window
-const CARD_TITLE = ' What fills the context '
+// The card over the bar, a cell per category of what fills the window, in columns as tall as
+// the rows it has: the prompt and its two rules, since the band above them paints over it
+const CARD_ROWS = 3
 const ROW_GLYPHS: Record<ContextRow['kind'], string> = { used: '■', free: '□', buffer: '▒' }
 // What warm-compact has in store for the pause, beside the countdown it runs on
 const UPCOMING_STYLES: Record<Upcoming['kind'], { icon: string; color: string }> = {
@@ -479,24 +480,30 @@ export const tokenText = (tokens: number): string => {
   return `${(tokens / 1_000_000).toFixed(1)}M`
 }
 
-export type CardLine = { glyph: string; color: string; text: string; isDim: boolean }
+export type CardCell = { glyph: string; color: string; text: string; isDim: boolean }
 
-// The card's lines, each padded to its full width: drawn over the rows above the footer, it
-// covers every cell of them it spans. The window left and the compaction buffer are dimmed
-export const cardLines = (rows: readonly ContextRow[]): { title: string; lines: CardLine[] } => {
-  const nameWidth = Math.max(...rows.map(row => row.name.length))
-  const tokenWidth = Math.max(...rows.map(row => tokenText(row.tokens).length))
-  const lines = rows.map(row => ({
-    glyph: ` ${ROW_GLYPHS[row.kind]}`,
-    color: row.color,
-    text: ` ${row.name.padEnd(nameWidth)}  ${tokenText(row.tokens).padStart(tokenWidth)} ${`${row.percent}%`.padStart(4)} `,
-    isDim: row.kind !== 'used',
-  }))
-  const width = Math.max(CARD_TITLE.length, ...lines.map(line => line.glyph.length + line.text.length))
-  return {
-    title: CARD_TITLE.padEnd(width),
-    lines: lines.map(line => ({ ...line, text: line.text.padEnd(width - line.glyph.length) })),
-  }
+// The card's lines, the categories down each column of CARD_ROWS, every column lined up and every
+// line padded to the card's full width: drawn over the rows above the footer, it covers every
+// cell of them it spans. The window left and the compaction buffer are dimmed
+export const cardLines = (rows: readonly ContextRow[]): CardCell[][] => {
+  const columns: ContextRow[][] = []
+  for (let i = 0; i < rows.length; i += CARD_ROWS) columns.push(rows.slice(i, i + CARD_ROWS))
+  const cells = columns.map(column => {
+    const nameWidth = Math.max(...column.map(row => row.name.length))
+    const tokenWidth = Math.max(...column.map(row => tokenText(row.tokens).length))
+    return column.map(row => ({
+      glyph: ` ${ROW_GLYPHS[row.kind]}`,
+      color: row.color,
+      text: ` ${row.name.padEnd(nameWidth)}  ${tokenText(row.tokens).padStart(tokenWidth)} ${`${row.percent}%`.padStart(4)} `,
+      isDim: row.kind !== 'used',
+    }))
+  })
+  return Array.from({ length: Math.min(rows.length, CARD_ROWS) }, (_, line) =>
+    cells.map(column => {
+      const [first] = column
+      return column[line] ?? { glyph: '', color: first?.color ?? '', text: ' '.repeat((first?.glyph.length ?? 0) + (first?.text.length ?? 0)), isDim: true }
+    }),
+  )
 }
 
 // What the card over warm-compact's mark says: what runs, and when
@@ -758,12 +765,13 @@ export const register: Register = on => {
             {percentText}
           </Text>
           {card !== null && (
-            <Box position="absolute" bottom={1} right={0} display="none" hover={{ display: 'flex' }} flexDirection="column" borderStyle="round" borderDimColor>
-              <Text dimColor>{card.title}</Text>
-              {card.lines.map(line => (
+            <Box position="absolute" bottom={1} right={0} display="none" hover={{ display: 'flex' }} flexDirection="column">
+              {card.map(line => (
                 <Box>
-                  <Text color={line.color}>{line.glyph}</Text>
-                  <Text dimColor={line.isDim}>{line.text}</Text>
+                  {line.flatMap(cell => [
+                    <Text color={cell.color}>{cell.glyph}</Text>,
+                    <Text dimColor={cell.isDim}>{cell.text}</Text>,
+                  ])}
                 </Box>
               ))}
             </Box>

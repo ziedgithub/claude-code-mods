@@ -589,17 +589,19 @@ test('tokenText keeps the figure short', () => {
   expect(tokenText(1_200_000)).toBe('1.2M')
 })
 
-test('cardLines lines the columns up and pads every line to the width of the card', () => {
-  const { title, lines } = cardLines(contextRows(CATEGORIES, 200_000))
-  expect(lines.map(line => line.glyph + line.text)).toEqual([
-    ' ■ System prompt       3.1k   2% ',
-    ' ■ System tools         14k   7% ',
-    ' ■ Messages             99k  49% ',
-    ' □ Free space           51k  26% ',
-    ' ▒ Autocompact buffer   33k  17% ',
+test('cardLines fills columns three rows tall, lines each one up and pads every line to the width of the card', () => {
+  const lines = cardLines(contextRows(CATEGORIES, 200_000))
+  expect(lines.map(line => line.map(cell => cell.glyph + cell.text).join(''))).toEqual([
+    ' ■ System prompt  3.1k   2%  □ Free space          51k  26% ',
+    ' ■ System tools    14k   7%  ▒ Autocompact buffer  33k  17% ',
+    ' ■ Messages        99k  49% ' + ' '.repeat(32),
   ])
-  expect(title).toBe(' What fills the context'.padEnd(33))
-  expect(lines.map(line => line.isDim)).toEqual([false, false, false, true, true])
+  expect(lines.map(line => line.map(cell => cell.isDim))).toEqual([
+    [false, true],
+    [false, true],
+    [false, true],
+  ])
+  expect(cardLines(contextRows(CATEGORIES, 200_000).slice(0, 2))).toHaveLength(2)
 })
 
 test('upcomingText says what warm-compact runs and when', () => {
@@ -619,8 +621,9 @@ test('hovering the bar shows what fills the context, over the rows above it', as
   // A drawn element carries its hover beside its props
   const card = bar?.children.at(-1) as { props: Record<string, unknown>; hover?: unknown } | undefined
   expect(card?.props).toMatchObject({ position: 'absolute', bottom: 1, right: 0, display: 'none' })
+  expect(card?.props.borderStyle).toBeUndefined()
   expect(card?.hover).toEqual({ display: 'flex' })
-  expect(await footer.find({ type: 'Text', text: ' Messages             99k  49% ' })).toBeDefined()
+  expect(await footer.find({ type: 'Text', text: ' Messages        99k  49% ' })).toBeDefined()
   expect(await footer.find({ type: 'Text', text: 'Deferred tools' })).toBeUndefined()
 })
 
