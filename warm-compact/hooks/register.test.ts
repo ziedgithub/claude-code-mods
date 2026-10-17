@@ -33,7 +33,7 @@ const engine = (on: any, store: Record<string, unknown> = {}) => {
     return { value: undefined }
   })
   on('store.keys', async () => ({ value: Object.keys(kept) }))
-  const world = { clock, store: kept, tokens: 120_000 as number | undefined, model: 'claude-opus-5-5', draft: '', usage: COMPACTION_USAGE as object | undefined, forkUsage: FORK_USAGE as object, forkResult: undefined as object | undefined, stepUsage: USAGE as object, forks: 0, compactions: [] as string[], statuses: [] as (string | undefined)[], toasts: [] as string[], logs: [] as string[], settings: { idleCompaction: false } as Record<string, unknown>, projectSettings: {} as Record<string, unknown>, isReadOnly: false, forkMs: 0, duringFork: undefined as (() => Promise<void>) | undefined, rateLimits: [] as object[], serverToolUses: undefined as object[] | undefined, isAutoCompactEnabled: true, breakdowns: 0, files: { [SETTINGS]: '{\n  "model": "opus"\n}\n' } as Record<string, string> }
+  const world = { clock, store: kept, tokens: 120_000 as number | undefined, model: 'claude-opus-5-5', draft: '', usage: COMPACTION_USAGE as object | undefined, forkUsage: FORK_USAGE as object, forkResult: undefined as object | undefined, stepUsage: USAGE as object, forks: 0, compactions: [] as string[], statuses: [] as (string | undefined)[], toasts: [] as string[], logs: [] as string[], settings: { idleCompaction: false } as Record<string, unknown>, projectSettings: {} as Record<string, unknown>, isReadOnly: false, forkMs: 0, duringFork: undefined as (() => Promise<void>) | undefined, rateLimits: [] as object[], serverToolUses: undefined as object[] | undefined, isAutoCompactEnabled: true, breakdowns: 0, files: { [SETTINGS]: '{\n  "model": "opus"\n}\n' } as Record<string, string>, env: {} as Record<string, string> }
   on('session.usage', async (_$: unknown, e: { breakdown?: string } | undefined) => {
     if (e?.breakdown !== undefined) world.breakdowns += 1
     const breakdown = e?.breakdown === undefined ? {} : { breakdown: { isAutoCompactEnabled: world.isAutoCompactEnabled } }
@@ -68,7 +68,7 @@ const engine = (on: any, store: Record<string, unknown> = {}) => {
     if (source === undefined) return { value: { ...world.settings, ...world.projectSettings } }
     return { value: source === 'user' ? world.settings : source === 'project' ? world.projectSettings : {} }
   })
-  on('env.get', async (_$: unknown, e: { name: string }) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
+  on('env.get', async (_$: unknown, e: { name: string }) => ({ value: e.name === 'HOME' ? '/home/me' : world.env[e.name] }))
   on('fs.read', async (_$: unknown, e: { path: string }) => {
     const text = world.files[e.path]
     if (text === undefined) throw new Error(`ENOENT: ${e.path}`)
@@ -410,6 +410,7 @@ test('a renewal that misses the cache hands over to a compaction on the entry it
   expect(world.forks).toBe(1)
   expect(world.compactions).toEqual(['plugin', 'plugin'])
   expect(world.logs.some(l => /renewals can't read the conversation from the cache on claude-opus-5-5/.test(l))).toBe(true)
+  expect(world.logs.filter(l => /\bversion\b|Claude Code \d/i.test(l))).toEqual([])
 })
 
 test('a second renewal that misses shows renewals hold five minutes, and keep warm stands down', LONG, async ($, on) => {
@@ -664,6 +665,59 @@ test('a settings file that will not read is not written', async ($, on) => {
 
 const COLD_COMPACTION = { input_tokens: 10, output_tokens: 1500, cache_read_input_tokens: 0, cache_creation_input_tokens: 119_500 }
 
+test('with an hour picked in the settings, the TTL needs no read to tell it, and a stand-down suggests nothing', LONG, async ($, on) => {
+  const world = engine(on)
+  world.settings = { ...world.settings, promptCacheTtl: '1h' }
+  world.usage = COLD_COMPACTION
+  await $.session.start(START)
+  await answer($)
+  await world.clock.advance(61 * MIN)
+  await answer($)
+  await world.clock.advance(61 * MIN)
+  expect(world.compactions).toEqual(['plugin', 'plugin'])
+  expect(world.logs.at(-1)).toMatch(/^Warm compact: its last 2 compactions couldn't read the conversation from the prompt cache, so it stands down\. \/warm-compact on tries again\.$/)
+  expect(world.store.cacheTtl).toBe(undefined)
+})
+
+test('with five minutes picked, warm compact stands down from the start, and says so once', LONG, async ($, on) => {
+  const world = engine(on, KNOWN)
+  world.env.CLAUDE_CODE_PROMPT_CACHE_TTL = '5m'
+  world.settings = { ...world.settings, promptCacheTtl: '1h' }
+  await $.session.start(START)
+  await answer($)
+  await world.clock.advance(61 * MIN)
+  expect(world.compactions).toEqual([])
+  expect(world.logs).toEqual(["Warm compact: Claude Code is set to cache the conversation for 5 minutes, which compactions can't read from, so it stands down."])
+  await run($, 'on')
+  await answer($)
+  await world.clock.advance(61 * MIN)
+  expect(world.compactions).toEqual([])
+  await $.session.start(START)
+  expect(world.logs.filter(l => /5 minutes/.test(l))).toHaveLength(1)
+  expect(world.store.cacheTtl).toBe('1h')
+})
+
+test('picking a TTL starts the misses over, and so does leaving it to Claude Code again', LONG, async ($, on) => {
+  const world = engine(on, { ...KNOWN, compactMisses: { '2.1.289': 2 } })
+  await $.session.start(START)
+  await answer($)
+  await world.clock.advance(61 * MIN)
+  expect(world.compactions).toEqual([])
+
+  world.settings = { ...world.settings, promptCacheTtl: '1h' }
+  await answer($)
+  await world.clock.advance(61 * MIN)
+  expect(world.compactions).toEqual(['plugin'])
+  expect(world.store.configuredTtl).toBe('1h')
+
+  world.store.compactMisses = { '2.1.289': 2 }
+  world.settings = { idleCompaction: false }
+  await answer($)
+  await world.clock.advance(61 * MIN)
+  expect(world.compactions).toEqual(['plugin', 'plugin'])
+  expect(world.store.configuredTtl).toBe('auto')
+})
+
 test('two compactions in a row that find the cache gone stand warm compact down, until it is turned on by hand', LONG, async ($, on) => {
   const world = engine(on, KNOWN)
   world.usage = COLD_COMPACTION
@@ -673,7 +727,8 @@ test('two compactions in a row that find the cache gone stand warm compact down,
   await answer($)
   await world.clock.advance(61 * MIN)
   expect(world.compactions).toEqual(['plugin', 'plugin'])
-  expect(world.logs.at(-1)).toMatch(/^Warm compact: its last 2 compactions found the prompt cache already gone on Claude Code 2\.1\.289, so it stands down/)
+  expect(world.logs.at(-1)).toMatch(/^Warm compact: its last 2 compactions couldn't read the conversation from the prompt cache, so it stands down\. "promptCacheTtl": "1h" in your settings can fix this; \/warm-compact on tries again\.$/)
+  expect(world.logs.filter(l => /\bversion\b|Claude Code \d/i.test(l))).toEqual([])
 
   await answer($)
   await world.clock.advance(61 * MIN)
@@ -1394,7 +1449,7 @@ test('the stand-down counts misses across sessions, as the store holds them', LO
   world.store.compactMisses = { version: '2.1.289', count: 2 }
   await answer($)
   await world.clock.advance(60 * MIN)
-  expect(world.logs.some(l => /its last 3 compactions found/.test(l))).toBe(true)
+  expect(world.logs.some(l => /its last 3 compactions couldn't read/.test(l))).toBe(true)
 })
 
 // A turn's last request ran an advisor: its usage is summed over its own two steps, twice the entry
@@ -1426,7 +1481,7 @@ test('misses on another Claude Code version, running at the same time, and this 
   world.store.compactMisses = { ...(world.store.compactMisses as object), '2.1.288': 1 }
   await answer($)
   await world.clock.advance(60 * MIN)
-  expect(world.logs.some(l => /its last 2 compactions found the prompt cache already gone on Claude Code 2\.1\.289/.test(l))).toBe(true)
+  expect(world.logs.some(l => /its last 2 compactions couldn't read the conversation from the prompt cache/.test(l))).toBe(true)
   expect((world.store.compactMisses as Record<string, number>)['2.1.288']).toBe(1)
 })
 

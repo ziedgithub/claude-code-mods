@@ -25,6 +25,14 @@ When you come back, a line in the transcript tells you what happened, for exampl
 
 **Two of those in a row and warm compact stands down** until Claude Code updates, and says so, once it knows how long your account caches (until then, a compaction finding the cache gone may only mean a 5-minute cache): on some Claude Code versions the compaction misses a cache that is still warm, so every compaction would cost a full re-read. While it stands down its chip shows off: `/warm-compact on`, or a click on the chip, tries again. Each Claude Code version counts its own misses, so a session still on an older version after an update doesn't reset the newer one's count.
 
+**The cache duration Claude Code is set to comes first.** Claude Code caches the conversation for an hour on a Claude subscription within its usage limits, and for 5 minutes otherwise, renewing those 5 minutes on its own for an hour after you were last active. Compactions can't read a cache kept alive that way, so the hour is what warm-compact needs. You can pick it with `"promptCacheTtl": "1h"` in `~/.claude/settings.json`; 1-hour cache writes cost more than 5-minute ones. warm-compact reads that setting, and the `CLAUDE_CODE_PROMPT_CACHE_TTL` and `FORCE_PROMPT_CACHING_5M` variables that override it:
+
+- **An hour picked:** warm-compact knows the duration, with nothing to learn.
+- **5 minutes picked:** warm-compact stands down for as long as it stays picked, and says why when a compaction would have come.
+- **Nothing picked:** it learns the duration as below, and a stand-down after two missed compactions suggests the setting.
+
+Changing the setting starts the missed compactions over.
+
 Whether your account caches for 5 minutes or an hour is learned from the requests themselves and remembered between sessions: the first request after a pause of 6 to 59 minutes shows it, and two such pauses in a row must agree before it changes. A compaction or a renewal that still finds the cache warm 59 minutes on shows an hour too. Until they do, it assumes an hour, as a Claude subscription has.
 
 Headless runs (`claude -p`) are left alone.

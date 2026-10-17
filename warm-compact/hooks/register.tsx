@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { CacheTtl, CompactionRecord, CompactionUsage, Kept, LastRequest, Upcoming } from '../types'
+import { FIVE_MINUTES_TEXT, HINT_TEXT, TTL_SETTING, configuredTtl } from './cache-setting'
 import { OFF_TEXT, SETTING, settingsPath, withIdleCompactionOff } from './idle-compaction'
 import { LATE_MS, MIN_LEAD_MS, WARN_MS, isInTime, isWake, limitText, nearLimit, plan, startOf, upcoming, warnText } from './plan'
 import { MAX_RECORDS, clockTime, compactionHit, isCacheMissed, noticeText, recordsOf, statsText } from './savings'
@@ -22,6 +23,9 @@ const RENEW_MISSES_KEY = 'renewMisses'
 // hold while a fork of the same moment read it whole
 const COMPACT_MISSES_KEY = 'compactMisses'
 const COMPACT_MISSES_TO = 2
+// The TTL last picked for Claude Code, 'auto' when left to it: misses counted under another one
+// start over
+const CONFIGURED_TTL_KEY = 'configuredTtl'
 const STAND_DOWN_TEXT = 'Warm compact: its last'
 const WAKE_TEXT = 'warm-compact left this pause alone: the computer slept, or Claude Code stalled, and the prompt cache may have lapsed meanwhile'
 // The fork that renews the cache asks for as little as it can
@@ -63,6 +67,8 @@ let cacheTtl: CacheTtl = DEFAULT_TTL
 // a first renewal that finds the cache gone may only show a five-minute cache, and counts against
 // neither Claude Code nor the model
 let isTtlKnown = false
+// The TTL picked for Claude Code, which no read is needed to tell, or null when left to it
+let configured: CacheTtl | null = null
 let shownStatus: string | undefined
 // A tick still running when the next comes: the next leaves it be, as two compactions at once
 // would compact twice
@@ -130,7 +136,7 @@ const republish = async ($: EngineInterface): Promise<void> => {
 // One read can mislead: a prompt changed meanwhile misses whatever the TTL, so two in a row
 // must agree before it changes
 const learnTtl = async ($: EngineInterface, ttl: CacheTtl | null): Promise<void> => {
-  if (ttl === null) return
+  if (ttl === null || configured !== null) return
   if (ttl === cacheTtl) {
     pendingTtl = null
     if (!isTtlKnown) {
@@ -292,7 +298,7 @@ const noteRenewMiss = async ($: EngineInterface, model: string): Promise<void> =
 const keepWarmBlock = (model: string, isCompactOn: boolean): string | null => {
   const then = isCompactOn ? ', so warm compact takes over.' : ', so it stands down.'
   if (cacheTtl === '1h' && renewTtl === '5m') return `Keep warm: a renewal holds this account's cache for 5 minutes only${then}`
-  if (renewMisses[model] === engineVersion) return `Keep warm: renewals can't read the conversation from the cache on ${model} with this Claude Code version${then}`
+  if (renewMisses[model] === engineVersion) return `Keep warm: renewals can't read the conversation from the cache on ${model}${then}`
   return null
 }
 
@@ -305,11 +311,46 @@ const missesOf = (value: unknown): Record<string, number> => {
   return Object.fromEntries(Object.entries(record).filter((entry): entry is [string, number] => typeof entry[1] === 'number' && entry[1] > 0))
 }
 
+// Picked, five minutes stands it down for as long as it stays picked. Left to Claude Code, the
+// way out is said too
 const compactBlock = (): string | null => {
+  if (configured === '5m') return FIVE_MINUTES_TEXT
   const count = compactMisses[engineVersion] ?? 0
-  return count >= COMPACT_MISSES_TO
-    ? `${STAND_DOWN_TEXT} ${count} compactions found the prompt cache already gone on Claude Code ${engineVersion}, so it stands down until Claude Code updates. /${COMMAND} on tries again.`
-    : null
+  if (count < COMPACT_MISSES_TO) return null
+  const fix = configured === null ? ` ${HINT_TEXT};` : ''
+  return `${STAND_DOWN_TEXT} ${count} compactions couldn't read the conversation from the prompt cache, so it stands down.${fix} /${COMMAND} on tries again.`
+}
+
+// Read as each session starts and each turn does, as /config may change it meanwhile. One that
+// differs from the last seen starts the misses over. Left to Claude Code again, the TTL is what
+// reads had told
+const readConfigured = async ($: EngineInterface): Promise<void> => {
+  let next: CacheTtl | null
+  try {
+    next = configuredTtl(await $.env.get('FORCE_PROMPT_CACHING_5M'), await $.env.get('CLAUDE_CODE_PROMPT_CACHE_TTL'), (await $.settings.read())[TTL_SETTING])
+  } catch {
+    return
+  }
+  const wasConfigured = configured !== null
+  configured = next
+  if (next !== null) {
+    cacheTtl = next
+    isTtlKnown = true
+    pendingTtl = null
+  } else if (wasConfigured) {
+    const stored = await $.store.get(CACHE_TTL_KEY)
+    cacheTtl = isCacheTtl(stored) ? stored : DEFAULT_TTL
+    isTtlKnown = isCacheTtl(stored)
+  }
+  const stored = await $.store.get(CONFIGURED_TTL_KEY)
+  if ((isCacheTtl(stored) ? stored : null) !== next) {
+    await $.store.set(CONFIGURED_TTL_KEY, next ?? 'auto')
+    compactMisses = {}
+    await $.store.set(COMPACT_MISSES_KEY, compactMisses)
+    for (const text of saidOnce) if (text.startsWith(STAND_DOWN_TEXT)) saidOnce.delete(text)
+  }
+  if (next !== null || wasConfigured) await publishTtl($)
+  await update($, standsDown, () => compactBlock() !== null)
 }
 
 // Other sessions count too, on this version or another: each change goes on from the stored counts
@@ -554,6 +595,7 @@ export const register: Register = (on, options) => {
     if (typeof misses === 'object' && misses !== null) renewMisses = misses as Record<string, string>
     compactMisses = missesOf(await $.store.get(COMPACT_MISSES_KEY))
     engineVersion = (await $.session.version()).version
+    await readConfigured($)
     await publishTtl($)
     await $.command.register({ name: COMMAND, description: 'Compact before the prompt cache goes cold: on or off for this session (nothing flips it), or stats for what it saved' })
     await $.command.register({ name: KEEP_WARM_COMMAND, description: 'Keep the prompt cache warm while you are away, instead of compacting at once: on or off for this session (nothing flips it)' })
@@ -567,6 +609,7 @@ export const register: Register = (on, options) => {
   on('turn.start', async ($, e, next) => {
     if ((e as { agentId?: string }).agentId !== undefined) return next(e)
     await update($, isTurnRunning, () => true)
+    await readConfigured($)
     await markReturned($)
     return next(e)
   })
