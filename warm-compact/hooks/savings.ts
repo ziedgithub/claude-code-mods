@@ -13,8 +13,10 @@ const READ_COSTS: readonly [RegExp, number][] = [
   [/opus-5-5/, 0.05],
 ]
 const DEFAULT_READ_COST = 0.1
-// Below this share read from the cache, the compaction's request found the entry gone
-const WARM_FROM = 50
+// Below this share read from the cache, the compaction's request found the entry gone. A miss
+// still reads the tools and the system prompt other sessions keep cached, half of a small
+// conversation; a warm compaction leaves only its last reply and its own prompt uncached
+const WARM_FROM = 80
 
 export const readCost = (model: string): number => READ_COSTS.find(([pattern]) => pattern.test(model))?.[1] ?? DEFAULT_READ_COST
 
