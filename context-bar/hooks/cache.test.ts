@@ -33,22 +33,31 @@ test('hitColor and isCacheTtl', () => {
   expect(isCacheTtl('2h')).toBe(false)
 })
 
-test('inferTtl tells the TTL from a request after a pause between five minutes and an hour', () => {
-  const prev = { at: 0, model: 'claude-opus-5-5' }
-  expect(inferTtl(prev, 'claude-opus-5-5', 98, 20 * 60_000)).toBe('1h')
-  expect(inferTtl(prev, 'claude-opus-5-5', 2, 20 * 60_000)).toBe('5m')
-  expect(inferTtl(prev, 'claude-opus-5-5', 30, 20 * 60_000)).toBe(null)
-  expect(inferTtl(prev, 'claude-opus-5-5', 2, 4 * 60_000)).toBe(null)
-  expect(inferTtl(prev, 'claude-opus-5-5', 2, 2 * 3_600_000)).toBe(null)
-  expect(inferTtl(prev, 'claude-sonnet-5-5', 2, 20 * 60_000)).toBe(null)
-  expect(inferTtl({ ...prev, at: null }, 'claude-opus-5-5', 98, 20 * 60_000)).toBe(null)
+test('inferTtl tells the TTL from what a request after a pause between five minutes and an hour read of the last entry', () => {
+  const prev = { at: 0, model: 'claude-opus-5-5', tokens: 120_000 }
+  const tokens = 121_000
+  expect(inferTtl(prev, 'claude-opus-5-5', 118_000, tokens, 20 * 60_000)).toBe('1h')
+  expect(inferTtl(prev, 'claude-opus-5-5', 2_000, tokens, 20 * 60_000)).toBe('5m')
+  // A miss still reads the tools and the system prompt other sessions keep cached
+  expect(inferTtl(prev, 'claude-opus-5-5', 36_000, tokens, 20 * 60_000)).toBe('5m')
+  expect(inferTtl(prev, 'claude-opus-5-5', 78_000, tokens, 20 * 60_000)).toBe(null)
+  // A long message pasted after the pause leaves the entry read whole
+  expect(inferTtl(prev, 'claude-opus-5-5', 120_000, 240_000, 20 * 60_000)).toBe('1h')
+  // On a small entry, that shared part alone reads warm, and tells nothing
+  expect(inferTtl({ ...prev, tokens: 30_000 }, 'claude-opus-5-5', 26_000, 31_000, 20 * 60_000)).toBe(null)
+  // Usage summed over an advisor's steps: an entry that seems twice its size
+  expect(inferTtl({ ...prev, tokens: 230_000 }, 'claude-opus-5-5', 107_000, 110_000, 20 * 60_000)).toBe(null)
+  expect(inferTtl(prev, 'claude-opus-5-5', 2_000, tokens, 4 * 60_000)).toBe(null)
+  expect(inferTtl(prev, 'claude-opus-5-5', 2_000, tokens, 2 * 3_600_000)).toBe(null)
+  expect(inferTtl(prev, 'claude-sonnet-5-5', 2_000, tokens, 20 * 60_000)).toBe(null)
+  expect(inferTtl({ ...prev, at: null }, 'claude-opus-5-5', 118_000, tokens, 20 * 60_000)).toBe(null)
 })
 
-test("inferRenewTtl tells a fork's entry from what a read after it found, the tools' cache aside", () => {
-  expect(inferRenewTtl(0, 95, 20 * 60_000)).toBe('1h')
-  expect(inferRenewTtl(0, 30, 20 * 60_000)).toBe('5m')
-  expect(inferRenewTtl(0, 70, 20 * 60_000)).toBe(null)
-  expect(inferRenewTtl(0, 95, 3 * 60_000)).toBe(null)
+test("inferRenewTtl tells a fork's entry from what a read after it found of it, the tools' cache aside", () => {
+  expect(inferRenewTtl(0, 120_000, 114_000, 121_000, 20 * 60_000)).toBe('1h')
+  expect(inferRenewTtl(0, 120_000, 36_000, 121_000, 20 * 60_000)).toBe('5m')
+  expect(inferRenewTtl(0, 120_000, 84_000, 121_000, 20 * 60_000)).toBe(null)
+  expect(inferRenewTtl(0, 120_000, 114_000, 121_000, 3 * 60_000)).toBe(null)
 })
 
 test("ttlOf counts a fork's entry down on the renewal's TTL once it is known", () => {

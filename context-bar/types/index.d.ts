@@ -14,7 +14,7 @@ export type CacheTtl = '5m' | '1h'
 // `model`: the session's model then, the one the cache entry belongs to.
 // `isFork`: that request was a plugin's fork of the conversation (keep warm's renewal), whose
 // entry may not last as long as one a request of the conversation leaves
-export type CacheInfo = { hitPercent: number; requestAt: number | null; model: string; isFork?: boolean }
+export type CacheInfo = { hitPercent: number; requestAt: number | null; model: string; isFork?: boolean; tokens?: number }
 
 // The agent whose transcript the person opened from the tasks list. `label`: its type, or a
 // teammate's name

@@ -86,6 +86,8 @@ The crab draws in the terminal only, at the finest detail a terminal's text allo
 claude plugin marketplace add ziedgithub/claude-code-mods && claude plugin install crab-buddy@zied-mods
 ```
 
+Needs Claude Code 2.1.296 or later.
+
 Then restart Claude Code.
 
 See the [repository README](../README.md) for running it from a clone.

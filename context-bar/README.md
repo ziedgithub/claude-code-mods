@@ -22,13 +22,15 @@ In Claude Code Desktop, which shows the model, the effort and the context of its
 
 On a narrow terminal the labels shorten, and when one row can't hold everything the blocks stack.
 
-What other mods put in the same slot, such as [warm-compact](../warm-compact/)'s on/off chip, goes at the right end of the row, along with the engine's own mode labels.
+What other mods put in the same slot goes at the right end of the row, along with the engine's own mode labels. [warm-compact](../warm-compact/)'s chips sit on their own row under the prompt hint.
 
 ## Install
 
 ```sh
 claude plugin marketplace add ziedgithub/claude-code-mods && claude plugin install context-bar@zied-mods
 ```
+
+Needs Claude Code 2.1.296 or later.
 
 Then restart Claude Code.
 

@@ -320,11 +320,11 @@ type Usage = typeof HIT
 // what `step` and `fork` say
 const cacheEngine = (on: any) => {
   // The engine's own world, so a test's change to what it measured reaches it
-  const world = Object.assign(engine(on), { step: HIT, fork: HIT as Usage | null, answerMs: 0 })
+  const world = Object.assign(engine(on), { step: HIT, fork: HIT as Usage | null, answerMs: 0, serverToolUses: undefined as object[] | undefined })
   on('turn.step', async function* (_$: unknown, e: { turnId: string; index: number }) {
     if (world.answerMs > 0) await world.clock.sleep(world.answerMs)
     yield { kind: 'stop' as const, stopReason: 'end_turn' as const, usage: world.step }
-    return { turnId: e.turnId, index: e.index, answer: 'ok', toolUses: [], stopReason: 'end_turn' as const, usage: world.step }
+    return { turnId: e.turnId, index: e.index, answer: 'ok', toolUses: [], stopReason: 'end_turn' as const, usage: world.step, ...(world.serverToolUses === undefined ? {} : { serverToolUses: world.serverToolUses }) }
   })
   on('model.fork', async () => ({
     value: world.fork === null ? { isAnswered: false, reason: 'nothing-to-fork' } : { isAnswered: true, text: 'ok', usage: world.fork },
@@ -539,7 +539,7 @@ test("a fork's entry found gone before the hour makes later forks count down fiv
   expect(await remaining()).toBe(' ~60m')
   await fork($)
   await world.clock.advance(1000)
-  expect(await remaining()).not.toBe(' cold')
+  expect(await remaining()).toBe(' ~5m')
 })
 
 const BAND = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100, scroll: { offset: 0, bodyRows: 10 } }
@@ -726,4 +726,166 @@ test('on the desktop the footer is one line with no picks or buttons', async ($,
   const footer = await $.ui.mount({ plugin: 'context-bar', surface: 'desktop', component: 'SessionMode', props: { modes: [] }, requestId: 'footer' })
   expect(await footer.find({ type: 'Text', text: 'Context 60%' })).toBeDefined()
   expect(await footer.find({ type: 'Button' })).toBeUndefined()
+})
+
+// A miss still reads the tools and the system prompt, which other sessions keep cached
+const SHARED_ONLY = { ...HIT, cache_read_input_tokens: 26_000, cache_creation_input_tokens: 73_990 }
+
+test('alone, the footer learns the TTL from what a request after a long pause read of the last entry', LONG, async ($, on) => {
+  const world = cacheEngine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const remaining = await cacheOf($)
+  await request($, 't1')
+  await world.clock.advance(20 * MINUTE)
+  world.step = SHARED_ONLY
+  await request($, 't2')
+  await world.clock.advance(1000)
+  expect(await remaining()).toBe(' ~5m')
+
+  // The entry read whole again after a long pause: an hour
+  await world.clock.advance(20 * MINUTE)
+  world.step = HIT
+  await request($, 't3')
+  await world.clock.advance(1000)
+  expect(await remaining()).toBe(' ~60m')
+
+  // A long message pasted after a pause leaves the entry read whole: still an hour
+  await world.clock.advance(10 * MINUTE)
+  world.step = { ...HIT, input_tokens: 120_000 }
+  await request($, 't4')
+  await world.clock.advance(1000)
+  expect(await remaining()).toBe(' ~60m')
+})
+
+test('alone, the footer is not misled by a turn that ended on an advisor call', LONG, async ($, on) => {
+  const world = cacheEngine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const remaining = await cacheOf($)
+  // Usage summed over the advisor's two steps: twice the entry it left
+  world.step = { ...HIT, cache_read_input_tokens: 218_000, cache_creation_input_tokens: 1_990 }
+  await request($, 't1')
+  await world.clock.advance(20 * MINUTE)
+  world.step = HIT
+  await request($, 't2')
+  await world.clock.advance(1000)
+  expect(await remaining()).toBe(' ~60m')
+})
+
+test('alone, the footer learns nothing from the first request after a /clear or a /resume', LONG, async ($, on) => {
+  const world = cacheEngine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const remaining = await cacheOf($)
+  for (const [reason, turnId] of [['clear', 't2'], ['resume', 't4']] as const) {
+    world.step = HIT
+    await request($, `${turnId}a`)
+    await world.clock.advance(10 * MINUTE)
+    await $.session.end({ reason, sessionId: 's1' } as never)
+    // The new conversation reads only what other sessions keep cached
+    world.step = SHARED_ONLY
+    await request($, turnId)
+    await world.clock.advance(1000)
+    expect(await remaining()).toBe(' ~60m')
+  }
+})
+
+test('alone, the footer learns nothing from a request the API ran tools of its own in', LONG, async ($, on) => {
+  const world = cacheEngine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const remaining = await cacheOf($)
+  await request($, 't1')
+  await world.clock.advance(20 * MINUTE)
+  world.step = SHARED_ONLY
+  world.serverToolUses = [{ id: 'srv1', name: 'advisor', input: {} }]
+  await request($, 't2')
+  await world.clock.advance(1000)
+  expect(await remaining()).toBe(' ~60m')
+})
+
+test('after a /resume, the countdown waits for the first request, the cache maybe kept warm', LONG, async ($, on) => {
+  const world = cacheEngine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const remaining = await cacheOf($)
+  await request($, 't1')
+  await world.clock.advance(10 * MINUTE)
+  await $.session.end({ reason: 'resume', sessionId: 's1' } as never)
+  await world.clock.advance(1000)
+  expect(await remaining()).toBe(undefined)
+  await request($, 't2')
+  await world.clock.advance(1000)
+  expect(await remaining()).toBe(' ~60m')
+})
+
+test('alone, the footer learns no TTL from the request after an advisor call, the entry\'s size being unknown', LONG, async ($, on) => {
+  const world = cacheEngine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const remaining = await cacheOf($)
+  await request($, 't1')
+  world.serverToolUses = [{ id: 'srv1', name: 'advisor', input: {} }]
+  await request($, 't2')
+  world.serverToolUses = undefined
+  await world.clock.advance(20 * MINUTE)
+  world.step = SHARED_ONLY
+  await request($, 't3')
+  await world.clock.advance(1000)
+  expect(await remaining()).toBe(' ~60m')
+})
+
+// The engine emptying context-bar's state as a session ends, which the test kit does not
+const CB_WIPER = {
+  name: 'cb-wiper',
+  register(on: any) {
+    let wiped = new Set<string>()
+    on('session.end', async (_$: unknown, e: any, next: any) => {
+      const result = await next(e)
+      wiped = new Set(['fill', 'model', 'asking', 'cache', 'viewing', 'breakdown'])
+      return result
+    })
+    on('state.set', async (_$: unknown, e: { plugin: string; key: string }, next: any) => {
+      if (e.plugin === 'context-bar') wiped.delete(e.key)
+      return next(e)
+    })
+    on('state.get', async (_$: unknown, e: { plugin: string; key: string }, next: any) => {
+      const result = await next(e)
+      return e.plugin === 'context-bar' && wiped.has(e.key) ? { ...result, value: { ...result.value, value: undefined } } : result
+    })
+  },
+}
+
+test('after a /resume to a smaller conversation, the first request does not show the old one\'s size', { ...LONG, plugins: [CB_WIPER] }, async ($, on) => {
+  const world = cacheEngine(on)
+  world.estimate = 100_000
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await request($, 't1')
+  await $.session.end({ reason: 'resume', sessionId: 's1' } as never)
+  world.measured = { percent: 10, tokens: 20_000 }
+  world.estimate = 20_000
+  await world.clock.advance(2000)
+  world.answerMs = 5000
+  world.step = { ...HIT, cache_read_input_tokens: 19_000 }
+  const answering = request($, 't2')
+  await world.clock.advance(10)
+  const during = await (await $.ui.mount({ plugin: 'context-bar', surface: 'terminal', component: 'SessionMode', props: { modes: [] }, requestId: 'footer2' })).find({ type: 'Text', text: /^ ~?\d+%$/ })
+  expect(during?.text).toBe(' ~10%')
+  await world.clock.advance(5000)
+  await answering
+})
+
+test('a /clear while Claude Code has no measure does not hide the next compaction no hook is told of', LONG, async ($, on) => {
+  const world = cacheEngine(on)
+  world.measured = {}
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await world.clock.advance(1000)
+  await $.session.end({ reason: 'clear', sessionId: 's1', resume: { sessionId: 's1' } } as never)
+  await world.clock.advance(1000)
+  const footer = await $.ui.mount({ plugin: 'context-bar', surface: 'terminal', component: 'SessionMode', props: { modes: [] }, requestId: 'footer' })
+  const percent = async () => (await footer.find({ type: 'Text', text: /^ ~?\d+%$/ }))?.text
+  const remaining = await cacheOf($)
+  world.measured = { percent: 50, tokens: 100000 }
+  await request($, 't1')
+  await world.clock.advance(2000)
+  expect(await percent()).toBe(' 50%')
+  world.measured = {}
+  await world.clock.advance(2000)
+  expect(await remaining()).toBe(' cold')
+  expect(await percent()).toBe(' ~16%')
 })

@@ -36,7 +36,7 @@ claude plugin marketplace update zied-mods && claude plugin update context-bar@z
 
 **Remove**: `claude plugin uninstall crab-buddy@zied-mods` (or `context-bar@zied-mods`, `warm-compact@zied-mods`).
 
-Needs a recent Claude Code: built and tested on 2.1.296.
+Needs Claude Code 2.1.296 or later: every mod is tested on 2.1.296 and 2.1.302.
 
 ## What's inside
 
@@ -81,6 +81,13 @@ npx -p typescript tsc -p crab-buddy      # type-check
 ```
 
 Type-checking needs `.claude-plugin/types/` inside the mod. Claude Code writes that folder the first time it loads the mod, and it is git-ignored.
+
+Some helpers are used by several mods: the stream tap, the shared chip row, the cache-duration rules and the env-file reader. A mod loads and installs on its own and can only import its own files, so each mod that uses a helper keeps a copy of it in `hooks/shared/`. The master copies live in [`shared/`](shared/). Edit the master, then copy it out:
+
+```sh
+scripts/sync-shared.sh           # refresh every copy from its master
+scripts/sync-shared.sh --check   # change nothing; fail if a copy drifted
+```
 
 ## License
 

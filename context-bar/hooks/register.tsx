@@ -3,7 +3,7 @@ import type { ContextCategory, EngineInterface, Register, Timer } from 'claude-c
 
 import type { AgentStats, CacheInfo, CacheTtl, ContextAction, ContextFill, ContextRow, LearnedTtl, ModelInfo, Question, Setting, Upcoming } from '../types'
 import { COLD_TEXT, formatRemaining, hitColor, remainingMs, ttlOf } from './cache'
-import { DEFAULT_TTL, hitPercent, inferRenewTtl, inferTtl, isCacheTtl } from './shared/cache-ttl'
+import { DEFAULT_TTL, hitPercent, inferRenewTtl, inferTtl, inputTokens, isCacheTtl } from './shared/cache-ttl'
 import { tap } from './shared/stream'
 
 const BAR_MIN = 3
@@ -297,7 +297,8 @@ const estimateOnceTaken = async ($: EngineInterface, waitedMs = 0): Promise<void
 
 const estimateWhenTaken = ($: EngineInterface): void => {
   isAwaitingTake = true
-  isDropTold = true
+  // A drop to come is told of only where there is a measure to drop
+  isDropTold = wasMeasured
   $.clock.after(0, () => void estimateOnceTaken($))
 }
 
@@ -385,10 +386,12 @@ const learnRenewTtl = async ($: EngineInterface, ttl: CacheTtl | null): Promise<
 // The first request after a pause tells how long the entry the last read left lasts, a fork's
 // or a request's. While warm-compact is loaded it learns that itself, and the countdown runs on
 // its figures, so the two never disagree
-const learnFrom = async ($: EngineInterface, prev: CacheInfo, model: string, hit: number, requestAt: number): Promise<void> => {
+// `cacheRead`: what the request read from the cache, out of the `tokens` it was answered over,
+// against the entry `prev` left
+const learnFrom = async ($: EngineInterface, prev: CacheInfo, model: string, cacheRead: number, tokens: number, requestAt: number): Promise<void> => {
   if ((await read($, warmTtl)) !== null) return
-  if (prev.isFork !== true) return learnTtl($, inferTtl({ at: prev.requestAt, model: prev.model }, model, hit, requestAt))
-  if (prev.requestAt !== null && prev.model === model) await learnRenewTtl($, inferRenewTtl(prev.requestAt, hit, requestAt))
+  if (prev.isFork !== true) return learnTtl($, inferTtl({ at: prev.requestAt, model: prev.model, tokens: prev.tokens }, model, cacheRead, tokens, requestAt))
+  if (prev.requestAt !== null && prev.model === model) await learnRenewTtl($, inferRenewTtl(prev.requestAt, prev.tokens, cacheRead, tokens, requestAt))
 }
 
 const ask = async ($: EngineInterface, question: Question): Promise<void> => {
@@ -470,11 +473,7 @@ export const agentWindow = (agentModel: string, sessionModel: string, sessionWin
 }
 
 // What the request was answered over: uncached, cache-read and cache-written input alike
-export const inputTokens = (usage: {
-  input_tokens: number
-  cache_read_input_tokens: number
-  cache_creation_input_tokens: number
-}): number => usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens
+export { inputTokens }
 
 // A response's own count of what it was answered over, as the engine measures it at turn end
 export const measuredFill = (tokens: number, window: number): ContextFill => ({
@@ -646,7 +645,10 @@ export const register: Register = on => {
       const early = estimatedFill(tokens, counted.window)
       await update($, fill, prev => (isMeasured ? prev : raisedFill(prev, early)))
     })
-    return yield* tap(next(e), async chunk => {
+    // A request the API ran tools of its own in (an advisor) reports usage summed over its steps,
+    // which tells no TTL and is no entry's size: it is learned from once it is answered
+    const telling: { read: { prev: CacheInfo; cacheRead: number; tokens: number } | null } = { read: null }
+    const result = yield* tap(next(e), async chunk => {
       if (chunk.kind !== 'stop' || chunk.usage === null) return
       // Each response of a turn moves the bar, not only the turn's end
       isMeasured = true
@@ -657,10 +659,17 @@ export const register: Register = on => {
       baseline = counted === null ? null : { counted: counted.tokens, measured: tokens }
       const hit = hitPercent(chunk.usage)
       const prev = await read($, cache)
-      if (e.index === 0 && hit !== null && prev !== null) await learnFrom($, prev, name, hit, requestAt)
+      if (e.index === 0 && hit !== null && prev !== null) telling.read = { prev, cacheRead: chunk.usage.cache_read_input_tokens, tokens }
       const hitNow = e.index === 0 || prev === null ? (hit ?? prev?.hitPercent ?? 0) : prev.hitPercent
-      await update($, cache, () => ({ hitPercent: hitNow, requestAt, model: name }))
+      await update($, cache, () => ({ hitPercent: hitNow, requestAt, model: name, tokens }))
     })
+    if ((result.serverToolUses ?? []).length > 0) {
+      await update($, cache, prev => (prev === null ? prev : { ...prev, tokens: undefined }))
+      return result
+    }
+    const seen = telling.read
+    if (seen !== null) await learnFrom($, seen.prev, name, seen.cacheRead, seen.tokens, requestAt)
+    return result
   })
 
   // A plugin's fork re-sends the main thread's last request with one more message after it,
@@ -671,9 +680,10 @@ export const register: Register = on => {
     const result = await next(e)
     const usage = result.value !== undefined && 'usage' in result.value ? result.value.usage : null
     const hit = usage === null ? null : hitPercent(usage)
-    if (hit === null) return result
+    if (usage === null || hit === null) return result
     const name = await $.session.model()
-    await update($, cache, () => ({ hitPercent: hit, requestAt, model: name, isFork: true }))
+    const tokens = inputTokens(usage)
+    await update($, cache, () => ({ hitPercent: hit, requestAt, model: name, isFork: true, tokens }))
     return result
   })
 
@@ -685,10 +695,16 @@ export const register: Register = on => {
   })
 
   // The cleared conversation is estimated once the engine has emptied it
+  // A /clear or a /resume goes on with another conversation, whose first request tells no TTL
+  // from the last one's entry. A cleared one has none cached; a resumed one may, kept warm by
+  // Claude Code since it was left, which only that request shows: until then nothing is shown
   on('session.end', async ($, e, next) => {
+    if (e.reason === 'clear') await update($, cache, prev => (prev === null ? prev : { ...prev, requestAt: null }))
+    if (e.reason === 'resume') await update($, cache, () => null)
+    // The last request's measure is the other conversation's, which no count since sets against
+    if (e.reason === 'clear' || e.reason === 'resume') baseline = null
     if (e.reason !== 'clear') return next(e)
     carried = await read($, model)
-    baseline = null
     const result = await next(e)
     estimateWhenTaken($)
     return result
