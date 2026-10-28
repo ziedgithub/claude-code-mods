@@ -1,0 +1,116 @@
+{
+  "name": "Feature loop",
+  "steps": [
+    {
+      "id": "spec",
+      "label": "Spec",
+      "role": "you + Claude",
+      "kind": "self",
+      "what": "Turns the request into acceptance criteria.",
+      "short": "Acceptance criteria from the request"
+    },
+    {
+      "id": "build",
+      "label": "Build",
+      "role": "builder agent",
+      "kind": "agent",
+      "what": "An agent writes the code and its tests.",
+      "short": "An agent writes code and tests"
+    },
+    {
+      "id": "test",
+      "label": "Test",
+      "role": "npm test",
+      "kind": "self",
+      "what": "Runs the whole test suite.",
+      "short": "Runs the test suite"
+    },
+    {
+      "id": "review",
+      "label": "Review",
+      "role": "reviewer agent",
+      "kind": "agent",
+      "what": "A reviewer reads the diff against the criteria.",
+      "short": "A reviewer reads the diff"
+    },
+    {
+      "id": "approve",
+      "label": "Approve",
+      "role": "you decide",
+      "kind": "human",
+      "what": "You approve the change or send it back.",
+      "short": "You approve or send it back"
+    },
+    {
+      "id": "ship",
+      "label": "Ship",
+      "role": "commit + PR",
+      "kind": "end",
+      "what": "Commits and opens the pull request.",
+      "short": "Commit and pull request"
+    }
+  ],
+  "arcs": [
+    {
+      "from": "spec",
+      "to": "build",
+      "label": "criteria agreed"
+    },
+    {
+      "from": "build",
+      "to": "test",
+      "label": "code written"
+    },
+    {
+      "from": "test",
+      "to": "review",
+      "label": "tests green"
+    },
+    {
+      "from": "test",
+      "to": "build",
+      "label": "tests red"
+    },
+    {
+      "from": "review",
+      "to": "approve",
+      "label": "VERDICT: PASS"
+    },
+    {
+      "from": "review",
+      "to": "build",
+      "label": "VERDICT: FIX"
+    },
+    {
+      "from": "approve",
+      "to": "ship",
+      "label": "approved"
+    },
+    {
+      "from": "approve",
+      "to": "spec",
+      "label": "rethink"
+    }
+  ],
+  "outcomes": [
+    {
+      "match": "^VERDICT: (\\w+)",
+      "text": "$1",
+      "bad": "^FIX"
+    }
+  ],
+  "runners": [
+    {
+      "match": "Tests:\\s+(\\d+) failed",
+      "text": "$1 tests failed",
+      "bad": "."
+    },
+    {
+      "match": "Tests:\\s+(\\d+) passed",
+      "text": "$1 tests passed"
+    }
+  ],
+  "reporters": [
+    "reviewer"
+  ]
+}

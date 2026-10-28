@@ -1,0 +1,11 @@
+{
+  "name": "loop-graph",
+  "version": "1.0.0",
+  "description": "Live graph of any project's agent loop in a side pane: the step at work, the path the run takes with its labelled arcs, each agent sent with its time and share of context, and the commands running. Comes with /loop-graph:setup, which maps a project's loop",
+  "author": { "name": "Zied BEN AMAR", "url": "https://github.com/ziedgithub" },
+  "homepage": "https://github.com/ziedgithub/claude-code-mods/tree/main/loop-graph",
+  "repository": "https://github.com/ziedgithub/claude-code-mods",
+  "license": "MIT",
+  "keywords": ["loop", "agents", "workflow", "graph", "pane", "subagents"],
+  "types": "./types/index.d.ts"
+}

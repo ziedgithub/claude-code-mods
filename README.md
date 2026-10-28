@@ -1,13 +1,13 @@
 # Claude Code mods
 
-Three mods for [Claude Code](https://claude.com/claude-code). Mods are plugins that hook straight into the engine to draw their own UI.
+Four mods for [Claude Code](https://claude.com/claude-code). Mods are plugins that hook straight into the engine to draw their own UI.
 
 ## Install
 
 Paste this in your terminal:
 
 ```sh
-claude plugin marketplace add ziedgithub/claude-code-mods && claude plugin install context-bar@zied-mods && claude plugin install crab-buddy@zied-mods && claude plugin install warm-compact@zied-mods
+claude plugin marketplace add ziedgithub/claude-code-mods && claude plugin install context-bar@zied-mods && claude plugin install crab-buddy@zied-mods && claude plugin install warm-compact@zied-mods && claude plugin install loop-graph@zied-mods
 ```
 
 Then restart Claude Code. That's it.
@@ -22,6 +22,7 @@ Inside Claude Code, type:
 /plugin install crab-buddy@zied-mods
 /plugin install context-bar@zied-mods
 /plugin install warm-compact@zied-mods
+/plugin install loop-graph@zied-mods
 ```
 
 Skip any `install` line to leave that mod out, then restart Claude Code.
@@ -31,10 +32,10 @@ Skip any `install` line to leave that mod out, then restart Claude Code.
 **Update** to the latest version, then restart:
 
 ```sh
-claude plugin marketplace update zied-mods && claude plugin update context-bar@zied-mods && claude plugin update crab-buddy@zied-mods && claude plugin update warm-compact@zied-mods
+claude plugin marketplace update zied-mods && claude plugin update context-bar@zied-mods && claude plugin update crab-buddy@zied-mods && claude plugin update warm-compact@zied-mods && claude plugin update loop-graph@zied-mods
 ```
 
-**Remove**: `claude plugin uninstall crab-buddy@zied-mods` (or `context-bar@zied-mods`, `warm-compact@zied-mods`).
+**Remove**: `claude plugin uninstall crab-buddy@zied-mods` (or `context-bar@zied-mods`, `warm-compact@zied-mods`, `loop-graph@zied-mods`).
 
 Needs Claude Code 2.1.296 or later: every mod is tested on 2.1.296 and 2.1.302.
 
@@ -45,6 +46,7 @@ Needs Claude Code 2.1.296 or later: every mod is tested on 2.1.296 and 2.1.302.
 | [**context-bar**](context-bar/) | A footer showing the model and effort, how full the context window is, and the prompt cache, with one-click compact and clear. |
 | [**crab-buddy**](crab-buddy/) | A pixel-art Claude crab above the prompt that works, thinks, cheers and sleeps along with your session, plus a small crab for each subagent, dressed for its kind of work. |
 | [**warm-compact**](warm-compact/) | Compacts an idle session a minute before its prompt cache goes cold, so your next prompt starts from a short summary instead of re-reading the whole conversation uncached. Or, with keep warm on, renews the cache while you're away and keeps the whole conversation. Two chips under the prompt turn each on or off. |
+| [**loop-graph**](loop-graph/) | A live graph of your project's agent loop in a pane beside the chat: the step at work, the path the run takes, each agent sent with its time and share of context, and the commands running. `/loop-graph:setup` maps any project's loop for it. |
 
 ![crab-buddy in action](docs/crab-buddy.gif)
 

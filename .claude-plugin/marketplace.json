@@ -5,7 +5,7 @@
     "url": "https://github.com/ziedgithub"
   },
   "metadata": {
-    "description": "Mods for Claude Code: a richer footer, a crab buddy above the prompt, and a compaction that beats the cache going cold."
+    "description": "Mods for Claude Code: a richer footer, a crab buddy above the prompt, a compaction that beats the cache going cold, and a live graph of your agent loop."
   },
   "plugins": [
     {
@@ -31,6 +31,14 @@
       "version": "0.4.1",
       "category": "productivity",
       "homepage": "https://github.com/ziedgithub/claude-code-mods/tree/main/warm-compact"
+    },
+    {
+      "name": "loop-graph",
+      "source": "./loop-graph",
+      "description": "Live graph of any project's agent loop in a side pane: the step at work, the path the run takes, each agent sent with its time and share of context, the commands running. /loop-graph:setup maps your project's loop",
+      "version": "1.0.0",
+      "category": "productivity",
+      "homepage": "https://github.com/ziedgithub/claude-code-mods/tree/main/loop-graph"
     }
   ]
 }
